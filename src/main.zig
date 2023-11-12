@@ -5,6 +5,10 @@ const ascii = std.ascii;
 const expect = std.testing.expect;
 const testing = std.testing;
 const ArrayList = std.ArrayList;
+
+
+const ziglyph = @import("ziglyph");
+const number = ziglyph.number;
 // https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
 // (try std.unicode.Utf8View.init("stirng")).iterator();
 
@@ -18,17 +22,18 @@ pub fn main() !void {
         if (deinit_status == .leak) expect(false) catch @panic("leaked");
     }
     _ = allocator;
-    {
-        var utf8 = (try std.unicode.Utf8View.init("سليم خطيب")).iterator();
-        while (utf8.nextCodepointSlice()) |codepoint| {
-            std.debug.print("got codepoint {any} {0s}\n", .{codepoint});
-        }
-    }
+    // {
+    //     var utf8 = (try std.unicode.Utf8View.init("سليم خطيب")).iterator();
+    //     while (utf8.nextCodepointSlice()) |codepoint| {
+    //         std.debug.print("got codepoint {any} {0s}\n", .{codepoint});
+    //     }
+    // }
     var utf8 = (try std.unicode.Utf8View.init("[")).iterator();
     var utf82 = Iterator{ .iter = utf8 };
     const token = utf82.next2();
+    // _ = try token;
 
-    std.debug.print("{0?s} '{0?any}'\n", .{token});
+    std.debug.print("{0?s} '{0?any}'\n", .{try token});
 
     // const list = [_]u8{' ','\t','\n','\r',','};
     // for(list,0..) |v,i|{
@@ -58,23 +63,23 @@ const Iterator = struct {
     iter: unicode.Utf8Iterator,
     //allocator: std.mem.Allocator,
     const Self = @This();
-
-    pub fn next2(self: *Iterator) ?Token {
+    const IterError = error{TaggedNotImplemented, CharacterNull, CharacterShit};
+    pub fn next2(self: *Iterator) !?Token {
         self.ignoreSeparator();
 
-        const c = self.iter.nextCodepoint();
-        if (c == null) {
+        const c = self.iter.nextCodepointSlice();
+        if (c == null or c.?.len == 0) {
             return null;
         }
-        switch (c.?) {
+        switch (c.?[0]) {
             inline '{', '[', '(', ')', ']', '}' => |del| {
-                return Token{ .tag = @field(Tag, &[_]u8{del}), .literal = &[1]Character{del} };
+                return Token{ .tag = @field(Tag, &[_]u8{del}), .literal = c.? };
             },
             '#' => {
                 const c2 = self.peek2();
-                if (c == null)
+                if (c == null or c.?.len == 0)
                     return null;
-                switch (c2.?) {
+                switch (c2.?[0]) {
                     '{' => {
                         _ = self.iter.nextCodepoint();
                         return Token{ .tag = Tag.@"#{", .literal = null };
@@ -85,14 +90,34 @@ const Iterator = struct {
                     },
                     else => {
                         // TODO: implement tagged elements
-                        return null;
+                        return IterError.TaggedNotImplemented;
                     },
                 }
             },
             '\\' => {
-                const c2 = self.iter.nextCodepoint();
-                if(c2 == null)
-                    return null;
+                const character = self.readCharacterValue();
+                const size = try unicode.utf8CountCodepoints(character);
+                if(size == 0)
+                    return IterError.CharacterNull;
+                if(size == 1)
+                    return Token{.tag = Tag.character, .literal = character};
+                if(std.mem.eql(u8,character,"space"))
+                    return Token{.tag = Tag.character, .literal = " "};
+                if(std.mem.eql(u8,character,"tab"))
+                    return Token{.tag = Tag.character, .literal = "\t"};
+                if(std.mem.eql(u8,character,"newline"))
+                    return Token{.tag = Tag.character, .literal = "\n"};
+                if(std.mem.eql(u8,character,"return"))
+                    return Token{.tag = Tag.character, .literal = "\r"};
+                if(character[0] == 'u' and character.len == 5){
+                    for(character[1..]) |d| {
+                        if(!ascii.isDigit(d))
+                            break;
+                    } else {
+                        return Token{.tag = Tag.character, .literal = character};
+                    }
+                }
+                return IterError.CharacterShit;
                 // if(self.peek2() == null)
             },
             else => return null,
@@ -102,22 +127,49 @@ const Iterator = struct {
     }
     pub fn ignoreSeparator(self: *Iterator) void {
         var c = self.peek2();
-        while (c != null and isSeparator(c.?)) : (c = self.iter.nextCodepoint()) {}
+        while (c != null and isSeparator(c.?)) : (c = self.iter.nextCodepointSlice()) {}
     }
-    pub fn isSeparator(c: Character) bool {
-        const ascii_c = @as(u8, @intCast(c));
+    pub fn consumeDigit(self: *Iterator) bool {
+        const c = self.iter.peek(1);
+        if (c) |d| {
+            if (ascii.isDigit(d)) {
+                _ = self.iter.nextCodepoint();
+                return true;
+            } else return false;
+        } else return false;
+    }
+    pub fn readCharacterValue(self: *Iterator) []const u8 {
+        var it = self.iter;
+        const original_i = it.i;
+        var end_ix = original_i;
+
+        // consume first character
+        _ = it.nextCodepoint();
+
+        var c = self.peek2();
+        while (c != null and !isSeparator(c.?)) : (c = it.nextCodepointSlice()) {
+            end_ix += c.?.len;
+        }
+        return if (c) |_|
+            it.bytes[original_i..end_ix]
+        else
+            it.bytes[original_i..];
+    }
+    
+    pub fn isSeparator(c: []const u8) bool {
+        if (c.len != 1)
+            return false;
+        const ascii_c = c[0];
         // .{32, 9, 10, 13, control_code.vt, control_code.ff}
         return ascii.isASCII(ascii_c) and (ascii.isWhitespace(ascii_c) or ascii_c == ',');
     }
     pub fn reset2(self: *Iterator) void {
         self.iter.i = 0;
     }
-    pub fn peek2(self: *Iterator) ?Character {
-        const i = self.iter.i;
-        const c = self.iter.nextCodepoint();
-        self.iter.i = i;
-        return c;
+    pub fn peek2(self: *Iterator) ?[]const u8 {
+        return self.iter.peek(1);
     }
+    // --------------------- OLD IMPLEMENTATION -----------------------
     pub fn next(self: *Self) ?[]const u8 {
         if (self.index >= self.buffer.len) return null;
         const c = self.buffer[self.index];
@@ -205,7 +257,7 @@ const Tag = enum {
 };
 const Token = struct {
     tag: Tag,
-    literal: ?[]const Character = null,
+    literal: ?[]const u8 = null,
 
     pub fn format(value: Token, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;

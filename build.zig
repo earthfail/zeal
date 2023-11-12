@@ -24,6 +24,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // ziglyph
+    const ziglyph = b.dependency("ziglyph", .{
+        .optimize = optimize,
+        .target = target,
+    });
+    // for exe, lib, tests, etc.
+    exe.addModule("ziglyph", ziglyph.module("ziglyph"));
+    
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
