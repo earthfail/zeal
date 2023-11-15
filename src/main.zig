@@ -43,39 +43,46 @@ pub fn main() !void {
     // std.debug.print("\u{0065}\u{0301}", .{});
     // \newline\return \t
 
-    const stdio = std.io.getStdOut().writer();
     // const chutf8 = try std.fmt.parseInt(u21, "00a3", 16);
     // var out = [_]u8{0} ** 3;
     // try stdio.print("d= {}\n", .{try unicode.utf8Encode(chutf8, &out)});
     // try stdio.print("{0any} '{0s}'\n", .{out});
+
+    // characters test
+    // \\ [{(,)},] \é
+    //     \\#_#{,,,  ,
+    //     \\\space,\tab
+    //     \\\u00A3\£
     const s =
-        \\ [{(,)},] \é
-        \\#_#{,,,  ,
-        \\\space,\tab
-        \\\u00A3\£
+        \\  "salim"
+        \\,"£ \\\t\\ shit 😄"
+        \\"","okay\nnow" "finé"
+        \\"history\r\nis written by the\n just"
     ;
+    std.debug.print("{*}\n", .{s.ptr});
+    try lexString(s, g_allocator);
+}
+pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
+    std.debug.print("s={any}\n", .{s.ptr});
+    const stdio = std.io.getStdOut().writer();
+    var grapheme_iter = MyGraphemeIter.init(s);
+    var edn_iter = Iterator{ .iter2 = grapheme_iter, .allocator = g_allocator };
 
-    {
-        std.debug.print("s= {any}\n", .{s.*});
-        var grapheme_iter = MyGraphemeIter.init(s);
-        var edn_iter = Iterator{ .iter2 = grapheme_iter, .allocator = g_allocator };
-
-        var tok = edn_iter.next2();
-        while (tok) |toke| : (tok = edn_iter.next2()) {
-            if (toke) |token| {
-                defer if (token.literal) |c| {
-                    if (token.tag == Tag.character)
-                        edn_iter.allocator.free(c);
-                };
-                try stdio.print("got '{s}' {0any}\n", .{token});
-                // defer {if(token.literal) |l| allocator.free(l);}
-            } else {
-                try stdio.print("got null\n", .{});
-                break;
-            }
-        } else |err| {
-            std.debug.print("got err {}\n", .{err});
+    var tok = edn_iter.next2();
+    while (tok) |toke| : (tok = edn_iter.next2()) {
+        if (toke) |token| {
+            defer if (token.literal) |c| {
+                if (token.tag == Tag.character or token.tag == Tag.string)
+                    edn_iter.allocator.free(c);
+            };
+            try stdio.print("got '{s}' {0any}\n", .{token});
+            // defer {if(token.literal) |l| allocator.free(l);}
+        } else {
+            try stdio.print("got null\n", .{});
+            break;
         }
+    } else |err| {
+        std.debug.print("got err {}\n", .{err});
     }
 }
 const Iterator = struct {
@@ -87,7 +94,7 @@ const Iterator = struct {
     iter: unicode.Utf8Iterator = undefined,
 
     const Self = @This();
-    const IterError = error{ TaggedNotImplemented, CharacterNull, CharacterShit, PoundError, NotFinished };
+    const IterError = error{ TaggedNotImplemented, KeywordNotImplemented, StringNotImplemented, SymbolNotImplemented, CharacterNull, CharacterShit, StringErr, PoundError, NotFinished };
 
     pub fn next2(self: *Iterator) !?Token {
         // std.debug.print("                first char '{s}' {0any}\n", .{self.iter2.peekSlice() orelse "START"});
@@ -98,6 +105,7 @@ const Iterator = struct {
         if (c == null) {
             return null;
         }
+        // std.debug.print("-----------------------------{} --- {}\n", .{ @intFromPtr(c.?.ptr), @intFromPtr(self.iter2.bytes.ptr) });
         switch (c.?[0]) {
             inline '{', '[', '(', ')', ']', '}' => |del| {
                 return Token{ .tag = @field(Tag, &[_]u8{del}), .literal = c.? };
@@ -174,6 +182,14 @@ const Iterator = struct {
 
                 return Token{ .tag = Tag.character, .literal = character };
             },
+            ':' => {
+                return IterError.KeywordNotImplemented;
+            },
+            '\"' => {
+                const string = try self.readString();
+                // std.debug.print("aaaa debug string '{s}' {0any}\n", .{ string});
+                return Token{ .tag = Tag.string, .literal = string };
+            },
             else => {
                 std.debug.print("c= '{s}' {0any}\n", .{c.?});
                 return IterError.NotFinished;
@@ -186,7 +202,7 @@ const Iterator = struct {
         while (self.iter2.peekSlice()) |c| : (_ = self.iter2.nextSlice()) {
             if (!isSeparator(c))
                 return;
-            std.debug.print("ignoring seperator '{0s}' {any}\n", .{c});
+            std.debug.print("________________________________________________ignoring seperator '{0s}' {any}\n", .{c});
         }
     }
 
@@ -226,6 +242,38 @@ const Iterator = struct {
         //     // self.iter2.i += c.len;
         // } else return self.iter2.bytes[original_i..];
         // return self.iter2.bytes[original_i .. end_ix + 1];
+    }
+    pub fn readString(self: *Iterator) ![]const u8 {
+        var output = std.ArrayList(u8).init(self.allocator);
+        errdefer output.deinit();
+
+        while (self.iter2.nextSlice()) |c| {
+            if (mem.eql(u8, c, "\""))
+                break;
+            if (mem.eql(u8, c, "\\")) {
+                if (self.iter2.nextSlice()) |quoted| {
+                    if (mem.eql(u8, quoted, "t")) {
+                        try output.append('\t');
+                    } else if (mem.eql(u8, quoted, "r")) {
+                        try output.append('\r');
+                    } else if (mem.eql(u8, quoted, "n")) {
+                        try output.append('\n');
+                    } else if (mem.eql(u8, quoted, "\\")) {
+                        try output.append('\\');
+                    } else if (mem.eql(u8, quoted, "\"")) {
+                        try output.append('\"');
+                    } else return IterError.StringErr;
+                    continue;
+                } else return IterError.StringErr;
+            }
+            try output.appendSlice(c);
+        }else
+            return IterError.StringErr;
+        return try output.toOwnedSlice();
+    }
+    pub fn readSymbol(self: *Iterator) !Edn.Symbol {
+        _ = self;
+        return IterError.SymbolNotImplemented;
     }
     pub fn isDelimiter(c: []const u8) bool {
         return std.mem.eql(u8, c, "{") or
@@ -330,7 +378,7 @@ const MyGraphemeIter = struct {
     }
     pub fn next(self: *MyGraphemeIter) ?Grapheme {
         var next_g = self.iter.next();
-        
+
         defer self.window = next_g;
         return self.peek();
     }
@@ -372,8 +420,12 @@ const Token = struct {
                 try writer.writeAll("null bool");
             },
             .string => {
-                try writer.writeAll("string");
-                try writer.writeAll("null string");
+                try writer.writeAll("string ");
+                try writer.writeAll("\"");
+                if (value.literal) |s| {
+                    try writer.writeAll(s);
+                } else try writer.writeAll("null");
+                try writer.writeAll("\"");
             },
             .character => {
                 try writer.writeAll("character '");
@@ -437,7 +489,8 @@ const Character = u21;
 const Edn = union(enum) {
     nil: null,
     boolean: bool,
-    string: [:0]const u8,
+    // string: [:0]const u8,
+    string: []const u8,
     character: Character,
 
     symbol: Symbol,
@@ -450,12 +503,23 @@ const Edn = union(enum) {
     hashmap: std.AutoArrayHashMap(Edn, Edn),
 
     const Symbol = struct {
-        namespace: ?[:0]const u8,
-        name: [:0]const u8,
+        namespace: ?[]const u8,
+        name: []const u8,
+
+        pub fn format(value: Symbol, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = options;
+            _ = fmt;
+            try writer.writeAll("Symbol ");
+            if (value.namespace) |namespace| {
+                try writer.writeAll(namespace);
+                try writer.writeAll("/");
+            }
+            try writer.writeAll(value.name);
+        }
     };
     const Keyword = struct {
-        namespace: ?[:0]const u8,
-        name: [:0]const u8,
+        namespace: ?[]const u8,
+        name: []const u8,
     };
 };
 
