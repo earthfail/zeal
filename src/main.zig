@@ -153,8 +153,9 @@ const Iterator = struct {
                         return Token{ .tag = Tag.character, .literal = literal };
                     }
                 }
-                if (character[0] == 'u' and character.len == 1 + 4) {
-                    defer self.allocator.free(character);
+                if (character[0] == 'u') {
+                    if(character.len != 1 + 4)
+                        return IterError.InvalidCharacter;
                     for (character[1..]) |d| {
                         if (!ascii.isHex(d))
                             return IterError.InvalidCharacter;
@@ -168,14 +169,23 @@ const Iterator = struct {
                             if (count != len)
                                 return IterError.InvalidCharacter;
                         } else |err| return err;
+
+                        self.allocator.free(character);
                         return Token{ .tag = Tag.character, .literal = out };
                     }
                 }
-
+                var iter_char = MyGraphemeIter.init(character);
+                _ = iter_char.nextSlice();
+                if(iter_char.nextSlice()) |c2| {
+                    if(!isSeparator(c2) and !isDelimiter(c2))
+                        return IterError.InvalidCharacter;
+                }
                 return Token{ .tag = Tag.character, .literal = character };
             },
             ':' => {
-                return IterError.NotFinished;
+                _ = self.iter.nextSlice();
+                const keyword = try self.readSymbol();
+                return Token{.tag = Tag.keyword, .literal = keyword};
             },
             '\"' => {
                 _ = self.iter.nextSlice();
@@ -527,7 +537,10 @@ const Token = struct {
             },
             .keyword => {
                 try writer.writeAll("keyword");
-                try writer.writeAll("null keyword");
+                if (value.literal) |key| {
+                    try writer.writeAll(":");
+                    try writer.writeAll(key);
+                } else try writer.writeAll("null keyword");
             },
             .integer => {
                 try writer.writeAll("int");
