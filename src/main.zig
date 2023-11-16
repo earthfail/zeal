@@ -55,36 +55,57 @@ pub fn main() !void {
     //     \\#_#{,,,  ,
     //     \\\space,\tab
     //     \\\u00A3\£
+    // {
+    //     const s =
+    //         \\  "salim"
+    //         \\,"£ \\\t\\ shit 😄"
+    //         \\"","okay\nnow" "finé"
+    //         \\"history\r\nis written by the\n just"
+    //     ;
+    //     std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
+    //     try lexString(s, g_allocator);
+    // }
+    // std.debug.print("\n", .{});
+    // {
+    //     const s =
+    //         \\ [{(,)},] \é
+    //         \\#_#{,,,  ,
+    //         \\\space,\tab
+    //         \\\u00A3\£
+    //     ;
+    //     std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
+    //     try lexString(s, g_allocator);
+    // }
+    // std.debug.print("\n", .{});
     {
         const s =
-            \\  "salim"
-            \\,"£ \\\t\\ shit 😄"
-            \\"","okay\nnow" "finé"
-            \\"history\r\nis written by the\n just"
-        ;
-        std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
-        try lexString(s, g_allocator);
-    }
-    std.debug.print("\n", .{});
-    {
-        const s =
-            \\ [{(,)},] \é
-            \\#_#{,,,  ,
-            \\\space,\tab
-            \\\u00A3\£
-        ;
-        std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
-        try lexString(s, g_allocator);
-    }
-    std.debug.print("\n", .{});
-    {
-        const s =
-            \\salim
             \\a/khatib / finé
+            \\salim
         ;
         std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
         try lexString(s, g_allocator);
     }
+    // const s: []const u8 =
+        // "é"; // should work with unicode.utf8decode
+        // "\u{0065}\u{0301}";
+        // "é";
+    // std.debug.print("'{s}' {0any} {d}\n",.{s,s.len});
+    
+    // std.debug.print("hopefully this works\n",.{});
+    // const deco =  unicode.utf8Decode(s) catch 696969;
+    // std.debug.print("{}\n",.{deco});
+    
+    // const z: []const u8 = "𐍈";
+    // std.debug.print("{} {1any}\n",.{try unicode.utf8Decode(z),z});
+
+    // const buf = "é".*;
+    // const a = "é";
+    // std.debug.print("{} {} {}\n",.{@TypeOf(buf),@TypeOf(&buf),@TypeOf(a)});
+    // var fis = std.io.fixedBufferStream(a);
+    // const reader = fis.reader();
+    // const deco = (try ziglyph.readCodePoint(reader)).?;
+    // std.debug.print("{} \n",.{deco});
+    
 }
 
 pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
@@ -219,8 +240,9 @@ const Iterator = struct {
                     std.debug.print("c= '{s}' {0any}\n", .{c.?});
                     return IterError.NumNotImplemented;
                 } else {
+                    std.debug.print("c= '{s}' {0any}\n", .{c.?});
                     const symbol = try self.readSymbol();
-                    std.debug.print("sssssss '{s}'\n", .{symbol});
+                    // std.debug.print("sssssss '{s}'\n", .{symbol});
                     return Token{ .tag = Tag.symbol, .literal = symbol };
                 }
             },
@@ -312,7 +334,8 @@ const Iterator = struct {
         if (self.iter2.nextSlice()) |first| {
             assert(!isSeparator(first)); // guaranteed by the next2 function
 
-            const firstu21 = try unicode.utf8Decode(first);
+            // const firstu21 = try unicode.utf8Decode(first);
+            const firstu21 = firstCodePoint(first);
             if (ziglyph.isNumber(firstu21))
                 return IterError.SymbolErr;
             if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
@@ -324,7 +347,8 @@ const Iterator = struct {
             try output.appendSlice(first);
             if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                 if (self.iter2.peekSlice()) |second| {
-                    if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                    // if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                    if (ziglyph.isNumber(firstCodePoint(second)))
                         return IterError.SymbolErr;
                 } else return output.toOwnedSlice();
             }
@@ -338,7 +362,10 @@ const Iterator = struct {
             }
         }
         while (self.iter2.peekSlice()) |c| {
-            const cu21 = try unicode.utf8Decode(c);
+            std.debug.print("getting c='{s}'\n",.{c});
+            // const cu21 = try unicode.utf8Decode(c);
+            const cu21 = firstCodePoint(c);
+            std.debug.print("c in u21 is '{d}'\n",.{cu21});
             if (ziglyph.isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
                 _ = self.iter2.nextSlice(); // consume c
                 try output.appendSlice(c);
@@ -354,7 +381,8 @@ const Iterator = struct {
                 if (self.iter2.nextSlice()) |first| {
                     if (isSeparator(first))
                         return IterError.SymbolErr; // name should not be empty
-                    const firstu21 = try unicode.utf8Decode(first);
+                    // const firstu21 = try unicode.utf8Decode(first);
+                    const firstu21 = firstCodePoint(first);
                     if (ziglyph.isNumber(firstu21))
                         return IterError.SymbolErr;
                     if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21))
@@ -363,7 +391,8 @@ const Iterator = struct {
                     try output.appendSlice(first);
                     if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                         if (self.iter2.peekSlice()) |second| {
-                            if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                            // if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                            if (ziglyph.isNumber(firstCodePoint(second)))
                                 return IterError.SymbolErr;
                         } else {
                             assert(!empty_prefix); // guarantees that it is a valid symbol
@@ -413,7 +442,12 @@ const Iterator = struct {
         // 10 0x0a \n, 13 0x0d \r
         return ascii.isASCII(ascii_c) and (ascii.isWhitespace(ascii_c) or ascii_c == ',');
     }
-
+    fn firstCodePoint(c: []const u8) u21 {
+        var fis = std.io.fixedBufferStream(c);
+        const reader = fis.reader();
+        const code_point = ziglyph.readCodePoint(reader) catch unreachable;
+        return code_point.?;
+    }
     /// return zero length if there is nothing to peek at
     pub fn peek2(self: *Iterator) ?[]const u8 {
         return self.iter2.peekSlice();
