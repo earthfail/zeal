@@ -6,9 +6,11 @@ const unicode = std.unicode;
 const ascii = std.ascii;
 const expect = std.testing.expect;
 const testing = std.testing;
+const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
-const Grapheme = @import("ziglyph").Grapheme;
+const ziglyph = @import("ziglyph");
+const Grapheme = ziglyph.Grapheme;
 const GraphemeIter = Grapheme.GraphemeIterator;
 // https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
 // (try std.unicode.Utf8View.init("stirng")).iterator();
@@ -53,15 +55,38 @@ pub fn main() !void {
     //     \\#_#{,,,  ,
     //     \\\space,\tab
     //     \\\u00A3\£
-    const s =
-        \\  "salim"
-        \\,"£ \\\t\\ shit 😄"
-        \\"","okay\nnow" "finé"
-        \\"history\r\nis written by the\n just"
-    ;
-    std.debug.print("{*}\n", .{s.ptr});
-    try lexString(s, g_allocator);
+    {
+        const s =
+            \\  "salim"
+            \\,"£ \\\t\\ shit 😄"
+            \\"","okay\nnow" "finé"
+            \\"history\r\nis written by the\n just"
+        ;
+        std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
+        try lexString(s, g_allocator);
+    }
+    std.debug.print("\n", .{});
+    {
+        const s =
+            \\ [{(,)},] \é
+            \\#_#{,,,  ,
+            \\\space,\tab
+            \\\u00A3\£
+        ;
+        std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
+        try lexString(s, g_allocator);
+    }
+    std.debug.print("\n", .{});
+    {
+        const s =
+            \\salim
+            \\a/khatib / finé
+        ;
+        std.debug.print("{*}\n {s}\n", .{ s.ptr, s });
+        try lexString(s, g_allocator);
+    }
 }
+
 pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
     std.debug.print("s={any}\n", .{s.ptr});
     const stdio = std.io.getStdOut().writer();
@@ -72,49 +97,48 @@ pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
     while (tok) |toke| : (tok = edn_iter.next2()) {
         if (toke) |token| {
             defer if (token.literal) |c| {
-                if (token.tag == Tag.character or token.tag == Tag.string)
+                if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol)
                     edn_iter.allocator.free(c);
             };
-            try stdio.print("got '{s}' {0any}\n", .{token});
+            try stdio.print("got {s}\n", .{token});
             // defer {if(token.literal) |l| allocator.free(l);}
         } else {
             try stdio.print("got null\n", .{});
             break;
         }
     } else |err| {
-        std.debug.print("got err {}\n", .{err});
+        try stdio.print("got err {}\n", .{err});
     }
 }
 const Iterator = struct {
     buffer: []const u8 = undefined,
     iter2: MyGraphemeIter,
-    allocator: std.mem.Allocator = undefined,
-
-    index: usize = 0,
-    iter: unicode.Utf8Iterator = undefined,
+    allocator: mem.Allocator = undefined,
 
     const Self = @This();
-    const IterError = error{ TaggedNotImplemented, KeywordNotImplemented, StringNotImplemented, SymbolNotImplemented, CharacterNull, CharacterShit, StringErr, PoundError, NotFinished };
+    const IterError = error{ TaggedNotImplemented, KeywordNotImplemented, NumNotImplemented, CharacterNull, CharacterShit, StringErr, SymbolErr, PoundErr, NotFinished };
 
     pub fn next2(self: *Iterator) !?Token {
         // std.debug.print("                first char '{s}' {0any}\n", .{self.iter2.peekSlice() orelse "START"});
         // defer std.debug.print("                last char '{s}' {0any}\n", .{self.iter2.peekSlice() orelse "EOF"});
 
         self.ignoreSeparator();
-        const c = self.iter2.nextSlice();
+        const c = self.iter2.peekSlice();
         if (c == null) {
             return null;
         }
         // std.debug.print("-----------------------------{} --- {}\n", .{ @intFromPtr(c.?.ptr), @intFromPtr(self.iter2.bytes.ptr) });
         switch (c.?[0]) {
             inline '{', '[', '(', ')', ']', '}' => |del| {
+                _ = self.iter2.nextSlice();
                 return Token{ .tag = @field(Tag, &[_]u8{del}), .literal = c.? };
             },
             '#' => {
+                _ = self.iter2.nextSlice();
                 const c2 = self.iter2.nextSlice();
                 // defer _ = self.iter2.next(); // REPLACE after implementing tagged elements
                 if (c2 == null)
-                    return IterError.PoundError;
+                    return IterError.PoundErr;
                 switch (c2.?[0]) {
                     '{' => {
                         return Token{ .tag = Tag.@"#{", .literal = null };
@@ -129,6 +153,7 @@ const Iterator = struct {
                 }
             },
             '\\' => {
+                _ = self.iter2.nextSlice();
                 const character = try self.readCharacterValue();
                 errdefer self.allocator.free(character);
                 const size = character.len;
@@ -136,30 +161,15 @@ const Iterator = struct {
 
                 if (size == 0)
                     return IterError.CharacterNull;
-
-                if (std.mem.eql(u8, character, "space")) {
-                    defer self.allocator.free(character); // unnecessary defer but used for consistency
-                    const literal = try self.allocator.alloc(u8, 1);
-                    literal[0] = ' ';
-                    return Token{ .tag = Tag.character, .literal = literal };
-                }
-                if (std.mem.eql(u8, character, "tab")) {
-                    defer self.allocator.free(character);
-                    const literal = try self.allocator.alloc(u8, 1);
-                    literal[0] = '\t';
-                    return Token{ .tag = Tag.character, .literal = literal };
-                }
-                if (std.mem.eql(u8, character, "newline")) {
-                    defer self.allocator.free(character);
-                    const literal = try self.allocator.alloc(u8, 1);
-                    literal[0] = '\n';
-                    return Token{ .tag = Tag.character, .literal = literal };
-                }
-                if (std.mem.eql(u8, character, "return")) {
-                    defer self.allocator.free(character);
-                    const literal = try self.allocator.alloc(u8, 1);
-                    literal[0] = '\r';
-                    return Token{ .tag = Tag.character, .literal = literal };
+                const names = [_][]const u8{ "space", "tab", "newline", "return" };
+                const chars = [_]u8{ ' ', '\t', '\n', '\r' };
+                inline for (names, chars) |name, char| {
+                    if (mem.eql(u8, character, name)) {
+                        defer self.allocator.free(character); // unnecessary defer but used for consistency
+                        const literal = try self.allocator.alloc(u8, 1);
+                        literal[0] = char;
+                        return Token{ .tag = Tag.character, .literal = literal };
+                    }
                 }
                 if (character[0] == 'u' and character.len == 1 + 4) {
                     defer self.allocator.free(character);
@@ -186,13 +196,33 @@ const Iterator = struct {
                 return IterError.KeywordNotImplemented;
             },
             '\"' => {
+                _ = self.iter2.nextSlice();
                 const string = try self.readString();
                 // std.debug.print("aaaa debug string '{s}' {0any}\n", .{ string});
                 return Token{ .tag = Tag.string, .literal = string };
             },
             else => {
-                std.debug.print("c= '{s}' {0any}\n", .{c.?});
-                return IterError.NotFinished;
+                var is_digit: bool = digit: {
+                    var iter = self.iter2;
+                    const c1 = try unicode.utf8Decode(iter.nextSlice().?); // guaranteed by switch first if statement
+                    if (ziglyph.isAsciiDigit(c1))
+                        break :digit true;
+                    if ('+' == c1 or '-' == c1) {
+                        if (iter.nextSlice()) |c2| {
+                            if (ziglyph.isAsciiDigit(try unicode.utf8Decode(c2)))
+                                break :digit true;
+                        }
+                    }
+                    break :digit false;
+                };
+                if (is_digit) {
+                    std.debug.print("c= '{s}' {0any}\n", .{c.?});
+                    return IterError.NumNotImplemented;
+                } else {
+                    const symbol = try self.readSymbol();
+                    std.debug.print("sssssss '{s}'\n", .{symbol});
+                    return Token{ .tag = Tag.symbol, .literal = symbol };
+                }
             },
         }
 
@@ -267,26 +297,115 @@ const Iterator = struct {
                 } else return IterError.StringErr;
             }
             try output.appendSlice(c);
-        }else
-            return IterError.StringErr;
+        } else return IterError.StringErr;
         return try output.toOwnedSlice();
     }
-    pub fn readSymbol(self: *Iterator) !Edn.Symbol {
-        _ = self;
-        return IterError.SymbolNotImplemented;
+    /// I could also read whole symbol then validate it. Maybe I will try it in another function.
+    /// But the iterface for parsing it cumbersome so I erred on the side of caution
+    /// or I could copy the iterator to simplified validation. In later commits WTWOG (with the will of God)
+    pub fn readSymbol(self: *Iterator) ![]const u8 {
+        var output = std.ArrayList(u8).init(self.allocator);
+        var encountered_slash = false;
+        var empty_prefix = false;
+        errdefer output.deinit();
+
+        if (self.iter2.nextSlice()) |first| {
+            assert(!isSeparator(first)); // guaranteed by the next2 function
+
+            const firstu21 = try unicode.utf8Decode(first);
+            if (ziglyph.isNumber(firstu21))
+                return IterError.SymbolErr;
+            if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
+                return IterError.SymbolErr;
+            if ('/' == firstu21) {
+                empty_prefix = true;
+                encountered_slash = true;
+            }
+            try output.appendSlice(first);
+            if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
+                if (self.iter2.peekSlice()) |second| {
+                    if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                        return IterError.SymbolErr;
+                } else return output.toOwnedSlice();
+            }
+        } else unreachable; // guaranteed by the next2 function
+
+        // check empty prefix and not empty name
+        if (self.iter2.peekSlice()) |c| {
+            if (!isSeparator(c)) {
+                if (empty_prefix and encountered_slash)
+                    return error.SymbolEmptyPrefix;
+            }
+        }
+        while (self.iter2.peekSlice()) |c| {
+            const cu21 = try unicode.utf8Decode(c);
+            if (ziglyph.isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
+                _ = self.iter2.nextSlice(); // consume c
+                try output.appendSlice(c);
+                continue;
+            } else if ('/' == cu21) {
+                if (encountered_slash)
+                    return IterError.SymbolErr;
+                encountered_slash = true;
+
+                _ = self.iter2.nextSlice(); // consume /
+                try output.appendSlice(c); // "/" == c
+                // check first character of name
+                if (self.iter2.nextSlice()) |first| {
+                    if (isSeparator(first))
+                        return IterError.SymbolErr; // name should not be empty
+                    const firstu21 = try unicode.utf8Decode(first);
+                    if (ziglyph.isNumber(firstu21))
+                        return IterError.SymbolErr;
+                    if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21))
+                        return IterError.SymbolErr;
+
+                    try output.appendSlice(first);
+                    if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
+                        if (self.iter2.peekSlice()) |second| {
+                            if (ziglyph.isNumber(try unicode.utf8Decode(second)))
+                                return IterError.SymbolErr;
+                        } else {
+                            assert(!empty_prefix); // guarantees that it is a valid symbol
+                            return output.toOwnedSlice();
+                        }
+                    }
+                } else return error.SymbolEmptyName; // name should not be empty
+
+            } else {
+                if (isSeparator(c)) {
+                    break;
+                } else return IterError.SymbolErr;
+            }
+        }
+
+        return try output.toOwnedSlice();
     }
-    pub fn isDelimiter(c: []const u8) bool {
-        return std.mem.eql(u8, c, "{") or
-            std.mem.eql(u8, c, "}") or
-            std.mem.eql(u8, c, "[") or
-            std.mem.eql(u8, c, "]") or
-            std.mem.eql(u8, c, "(") or
-            std.mem.eql(u8, c, ")") or
-            std.mem.eql(u8, c, "#") or
-            std.mem.eql(u8, c, "\\") or
-            std.mem.eql(u8, c, "\"");
+
+    /// check the special character that a symbol can contain other than the alphanumberic
+    fn isSymbolSpecialCharacter(c: u21) bool {
+        const c_ascii = @as(u8, @intCast(c));
+        return switch (c_ascii) {
+            '.', '*', '+', '!', '-', '_', '?', '$', '%', '&', '=', '<', '>' => true,
+            else => false,
+        };
     }
-    pub fn isSeparator(c: []const u8) bool {
+    fn isKeywordTagDelimiter(c: u21) bool {
+        const c_ascii = @as(u8, @intCast(c));
+        return c_ascii == ':' or c_ascii == '#';
+    }
+    fn isDelimiter(c: []const u8) bool {
+        return mem.eql(u8, c, "{") or
+            mem.eql(u8, c, "}") or
+            mem.eql(u8, c, "[") or
+            mem.eql(u8, c, "]") or
+            mem.eql(u8, c, "(") or
+            mem.eql(u8, c, ")") or
+            mem.eql(u8, c, "#") or
+            mem.eql(u8, c, "\\") or
+            mem.eql(u8, c, "\"");
+    }
+    fn isSeparator(c: []const u8) bool {
         if (c.len != 1)
             return false;
         const ascii_c = c[0];
@@ -308,54 +427,13 @@ const Iterator = struct {
             } else return false;
         } else return false;
     }
-    // --------------------- OLD IMPLEMENTATION -----------------------
-
-    // ---------------- PRIVATE PROCEDURES ----------------
-    pub fn peek_ch(self: Self) ?u8 {
-        const index = self.index;
-        if (index < self.buffer.len - 1)
-            return self.buffer[index + 1]
-        else {
-            return null;
-        }
-    }
-    pub fn consume_character(self: *Self) ?[]const u8 {
-        const index = self.index;
-        var i = index;
-
-        if (self.buffer[i] != '\\') {
-            return null;
-        } else {
-            i += 1;
-        }
-        while (i < self.buffer.len and !ascii.isWhitespace(self.buffer[i])) : (i += 1) {}
-        const character = self.buffer[index + 1 .. i];
-        defer self.index = i;
-
-        if (character.len == 0) {
-            return null;
-        } else if (character.len == 1) {
-            return character;
-        } else if (character[0] == 'u' and character.len == 5) {
-            return "[UNICODE]";
-        } else {
-            if (mem.eql(u8, character, "newline")) {
-                return "\n";
-            } else if (mem.eql(u8, character, "return")) {
-                return "\r";
-            } else if (mem.eql(u8, character, "space")) {
-                return " ";
-            } else if (mem.eql(u8, character, "tab")) {
-                return "\t";
-            } else return "UNSUPPORTED CHARACTER";
-        }
-    }
 };
 /// implement peek for Grapheme.GraphemeIterator
-/// iterator has two main functions nextSlice,peekSlice with the following property:
+/// iterator has two main functions nextSlice,peekSlice with the following properties:
 /// const c1 = self.peek();
 /// const c2 = self.next();
 /// std.mem.eql(u8,c1,c2)
+/// and self.peek is idempotent
 const MyGraphemeIter = struct {
     // buffer: [2]?Grapheme = [_]?Grapheme{null,null}, // first is the current Grapheme
     window: ?Grapheme = null,
@@ -416,19 +494,20 @@ const Token = struct {
             .@"#_" => try writer.writeAll("#_"),
             .nil => try writer.writeAll("nil"),
             .boolean => {
-                try writer.writeAll("boolean");
-                try writer.writeAll("null bool");
+                if(value.literal) |b| {
+                    try writer.writeAll(b);
+                }else 
+                    try writer.writeAll("null bool");
             },
             .string => {
-                try writer.writeAll("string ");
-                try writer.writeAll("\"");
                 if (value.literal) |s| {
+                    try writer.writeAll("\"");
                     try writer.writeAll(s);
-                } else try writer.writeAll("null");
-                try writer.writeAll("\"");
+                    try writer.writeAll("\"");
+                } else try writer.writeAll("null string");
             },
             .character => {
-                try writer.writeAll("character '");
+                // try writer.writeAll("character '");
                 if (value.literal) |c| {
                     if (c.len == 1) {
                         switch (c[0]) {
@@ -442,12 +521,15 @@ const Token = struct {
                         try writer.writeAll("\\");
                         try writer.writeAll(c);
                     }
-                } else try writer.writeAll("null");
-                try writer.writeAll("'");
+                } else try writer.writeAll("null character");
+                // try writer.writeAll("'");
             },
             .symbol => {
-                try writer.writeAll("symbol");
-                try writer.writeAll("null symbol");
+                // try writer.writeAll("symbol");
+                if (value.literal) |sym| {
+                    // try writer.writeAll("'");
+                    try writer.writeAll(sym);
+                } else try writer.writeAll("null symbol");
             },
             .keyword => {
                 try writer.writeAll("keyword");
@@ -520,6 +602,17 @@ const Edn = union(enum) {
     const Keyword = struct {
         namespace: ?[]const u8,
         name: []const u8,
+
+        pub fn format(value: Keyword, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = options;
+            _ = fmt;
+            try writer.writeAll("Keyword #");
+            if (value.namespace) |namespace| {
+                try writer.writeAll(namespace);
+                try writer.writeAll("/");
+            }
+            try writer.writeAll(value.name);
+        }
     };
 };
 
