@@ -67,9 +67,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    unit_tests.addModule("ziglyph", ziglyph.module("ziglyph"));
+    
     const run_unit_tests = b.addRunArtifact(unit_tests);
-
+    
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
