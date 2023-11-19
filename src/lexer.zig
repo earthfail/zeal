@@ -649,54 +649,6 @@ pub const Tag = enum {
     integer,
     float,
 };
-const Character = u21;
-const Edn = union(enum) {
-    nil: null,
-    boolean: bool,
-    // string: [:0]const u8,
-    string: []const u8,
-    character: Character,
-
-    symbol: Symbol,
-    keyword: Keyword,
-
-    integer: i64,
-    float: f64,
-
-    list: std.ArrayList(Edn),
-    hashmap: std.AutoArrayHashMap(Edn, Edn),
-
-    const Symbol = struct {
-        namespace: ?[]const u8,
-        name: []const u8,
-
-        pub fn format(value: Symbol, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = options;
-            _ = fmt;
-            try writer.writeAll("Symbol ");
-            if (value.namespace) |namespace| {
-                try writer.writeAll(namespace);
-                try writer.writeAll("/");
-            }
-            try writer.writeAll(value.name);
-        }
-    };
-    const Keyword = struct {
-        namespace: ?[]const u8,
-        name: []const u8,
-
-        pub fn format(value: Keyword, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = options;
-            _ = fmt;
-            try writer.writeAll("Keyword #");
-            if (value.namespace) |namespace| {
-                try writer.writeAll(namespace);
-                try writer.writeAll("/");
-            }
-            try writer.writeAll(value.name);
-        }
-    };
-};
 
 test "test characters and strings" {
     const s_arr = [_][]const u8{
