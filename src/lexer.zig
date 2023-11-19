@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const mem = std.mem;
+const log = std.log;
 const unicode = std.unicode;
 const ascii = std.ascii;
 const expect = std.testing.expect;
@@ -9,12 +10,21 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
+pub const std_options = struct {
+    // Set the log level to info
+    pub const log_level = .warn;
+
+    // Define logFn to override the std implementation
+    // pub const logFn = myLogFn;
+};
+
+
 const ziglyph = @import("ziglyph");
 const Grapheme = ziglyph.Grapheme;
 const GraphemeIter = Grapheme.GraphemeIterator;
 // https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
 // (try std.unicode.Utf8View.init("string")).iterator();
-pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
+pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     std.debug.print("s={any}\n", .{s.ptr});
     const stdio = std.io.getStdOut().writer();
 
@@ -26,8 +36,8 @@ pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
                 if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
                     edn_iter.allocator.free(c);
             };
-            try stdio.print("got '{s}'\n", .{token});
-            // defer {if(token.literal) |l| allocator.free(l);}
+            try stdio.print("got '{s}' {}\n", .{token,token.tag});
+
         } else {
             try stdio.print("got null\n", .{});
             break;
@@ -37,7 +47,7 @@ pub fn lexString(s: []const u8, g_allocator: mem.Allocator) !void {
     }
 }
 
-const Iterator = struct {
+pub const Iterator = struct {
     iter: MyGraphemeIter,
     allocator: mem.Allocator = undefined,
 
@@ -49,8 +59,8 @@ const Iterator = struct {
         return self;
     }
     pub fn next2(self: *Iterator) !?Token {
-        // std.debug.print("                first char '{s}' {0any}\n", .{self.iter.peekSlice() orelse "START"});
-        // defer std.debug.print("                last char '{s}' {0any}\n", .{self.iter.peekSlice() orelse "EOF"});
+        log.debug("                first char '{s}' {0any}", .{self.iter.peekSlice() orelse "START"});
+        defer log.debug("                last char '{s}' {0any}", .{self.iter.peekSlice() orelse "EOF"});
 
         self.ignoreSeparator();
         const c = self.iter.peekSlice();
@@ -177,20 +187,20 @@ const Iterator = struct {
     }
     pub fn ignoreSeparator(self: *Iterator) void {
         while (self.iter.peekSlice()) |c| : (_ = self.iter.nextSlice()) {
-            if (isSeparator(c)){
+            if (isSeparator(c)) {
                 continue;
-            }else if(mem.eql(u8,c,";")){
-                while(self.iter.nextSlice()) |comment| {
-                    if(mem.eql(u8,comment,"\n"))
+            } else if (mem.eql(u8, c, ";")) {
+                while (self.iter.nextSlice()) |comment| {
+                    if (mem.eql(u8, comment, "\n"))
                         break;
                 }
-            }else break;
+            } else break;
             // std.debug.print("________________________________________________ignoring seperator '{0s}' {any}\n", .{c});
         }
     }
     pub fn readNumber(self: *Iterator) !Token {
         var output = ArrayList(u8).init(self.allocator);
-
+        errdefer output.deinit();
         // if (self.iter.peekSlice()) |prefix| {
         //     const c1 = firstCodePoint(prefix);
         //     if ('-' == c1) {
@@ -247,8 +257,8 @@ const Iterator = struct {
                     const c2 = firstCodePoint(self.iter.peekSlice().?);
                     if ('e' == c2 or 'E' == c2) {
                         try output.appendSlice(self.iter.nextSlice().?);
-                        if(self.iter.peekSlice()) |d| {
-                            if(ziglyph.isAsciiDigit(firstCodePoint(d))){
+                        if (self.iter.peekSlice()) |d| {
+                            if (ziglyph.isAsciiDigit(firstCodePoint(d))) {
                                 try self.readSign(&output);
                                 try self.readDigits(&output);
                                 exp = true;
@@ -346,8 +356,8 @@ const Iterator = struct {
             if (ziglyph.isNumber(firstu21))
                 return IterError.SymbolErr;
             if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
-                // return IterError.SymbolErr;
-                return error.e1;
+                return IterError.SymbolErr;
+                // return error.e1;
             if ('/' == firstu21) {
                 empty_prefix = true;
                 encountered_slash = true;
@@ -523,7 +533,7 @@ const MyGraphemeIter = struct {
         return self.peekSlice();
     }
 };
-pub fn debugMyGraphemeIter(s: []const u8) void {
+fn debugMyGraphemeIter(s: []const u8) void {
     var grapheme_iter = MyGraphemeIter.init(s);
     while (grapheme_iter.peekSlice()) |token| {
         const c = grapheme_iter.nextSlice();
@@ -533,7 +543,7 @@ pub fn debugMyGraphemeIter(s: []const u8) void {
     }
 }
 
-const Token = struct {
+pub const Token = struct {
     tag: Tag,
     literal: ?[]const u8 = null,
 
@@ -571,7 +581,10 @@ const Token = struct {
                             '\n' => try writer.writeAll("\\newline"),
                             '\r' => try writer.writeAll("\\return"),
                             ' ' => try writer.writeAll("\\space"),
-                            else => {},
+                            else => {
+                                try writer.writeAll("\\");
+                                try writer.writeAll(c);
+                            },
                         }
                     } else {
                         try writer.writeAll("\\");
@@ -617,7 +630,7 @@ const Token = struct {
         return;
     }
 };
-const Tag = enum {
+pub const Tag = enum {
     @"{",
     @"}",
     @"(",
@@ -627,8 +640,8 @@ const Tag = enum {
     @"#{",
     @"#_",
     tag,
-    nil,
-    boolean,
+    // nil,
+    // boolean,
     string,
     character,
     symbol,
