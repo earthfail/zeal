@@ -177,8 +177,14 @@ const Iterator = struct {
     }
     pub fn ignoreSeparator(self: *Iterator) void {
         while (self.iter.peekSlice()) |c| : (_ = self.iter.nextSlice()) {
-            if (!isSeparator(c))
-                return;
+            if (isSeparator(c)){
+                continue;
+            }else if(mem.eql(u8,c,";")){
+                while(self.iter.nextSlice()) |comment| {
+                    if(mem.eql(u8,comment,"\n"))
+                        break;
+                }
+            }else break;
             // std.debug.print("________________________________________________ignoring seperator '{0s}' {any}\n", .{c});
         }
     }
@@ -241,12 +247,16 @@ const Iterator = struct {
                     const c2 = firstCodePoint(self.iter.peekSlice().?);
                     if ('e' == c2 or 'E' == c2) {
                         try output.appendSlice(self.iter.nextSlice().?);
-                        try self.readSign(&output);
-                        try self.readDigits(&output);
-                        exp = true;
+                        if(self.iter.peekSlice()) |d| {
+                            if(ziglyph.isAsciiDigit(firstCodePoint(d))){
+                                try self.readSign(&output);
+                                try self.readDigits(&output);
+                                exp = true;
+                            } else return error.InvalidNumber;
+                        }
                     }
                     if (fract or exp) {
-                        if (self.iter.peekSlice() == null or isSeparator(self.iter.peekSlice().?)) {
+                        if (self.iter.peekSlice() == null or isSeparator(self.iter.peekSlice().?) or isDelimiter(self.iter.peekSlice().?)) {
                             return .{ .literal = try output.toOwnedSlice(), .tag = Tag.float };
                         } else return error.InvalidNumber;
                     } else return error.FloatErr;
