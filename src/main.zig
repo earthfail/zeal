@@ -1,12 +1,21 @@
 // https://discord.com/channels/605571803288698900/1173940455872933978/1173941982448603228
 
 const std = @import("std");
+const log = std.log;
 const mem = std.mem;
 const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
 
 const lexer = @import("lexer.zig");
+// overrides std_options. see zig/lib/std/std.zig options_override
+pub const std_options = struct {
+    // Set the log level to info
+    pub const log_level = .info;
+
+    // Define logFn to override the std implementation
+    // pub const logFn = myLogFn;
+};
 
 fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
     var line = (try reader.readUntilDelimiterOrEof(
@@ -33,16 +42,17 @@ fn repl() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdio = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+    const stdin = std.io.getStdIn().reader();
     var buffer: [2000]u8 = undefined;
     while (true) {
-        std.debug.print("reading input:", .{});
-        if (try nextLine(stdio, &buffer)) |input| {
+        try stdout.print("reading input:", .{});
+        if (try nextLine(stdin, &buffer)) |input| {
             // if(input.len == 0) break;
             try lexer.lexString(input, allocator);
         } else break;
     }
-    std.debug.print("finished\n", .{});
+    try stdout.print("finished\n", .{});
 }
 // clojure koans
 pub fn main() !void {
