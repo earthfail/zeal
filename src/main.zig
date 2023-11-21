@@ -95,177 +95,188 @@ pub fn main() !void {
 }
 pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
     // var iter = lexer.Iterator.init(allocator, str);
-    if (iter.next()) |tok| {
-        if (tok) |token| {
-            log.info("token is {}", .{token});
-            switch (token.tag) {
-                // .nil => return Edn{ .nil = Edn.nil },
-                .symbol => {
-                    if (mem.eql(u8, "true", token.literal.?)) {
-                        return &Edn.true;
-                    } else if (mem.eql(u8, "false", token.literal.?)) {
-                        return &Edn.false;
-                    } else if (mem.eql(u8, "nil", token.literal.?)) {
-                        return &Edn.nil;
-                    } else {
-                        const value = try allocator.create(Edn);
-                        value.* = .{ .symbol = token.literal.? };
-                        return value;
-                    }
-                },
-                .keyword => {
+    if (iter.next()) |token| {
+        log.info("token is {}", .{token});
+        switch (token.tag) {
+            // .nil => return Edn{ .nil = Edn.nil },
+            .symbol => {
+                if (mem.eql(u8, "true", token.literal.?)) {
+                    return &Edn.true;
+                } else if (mem.eql(u8, "false", token.literal.?)) {
+                    return &Edn.false;
+                } else if (mem.eql(u8, "nil", token.literal.?)) {
+                    return &Edn.nil;
+                } else {
                     const value = try allocator.create(Edn);
-                    // const keyword = try allocator.create(Keyword);
-                    // keyword.name = token.literal.?;
-                    // value.* = .{ .keyword = .{ .name = token.literal.? } };
-                    value.* = .{ .keyword = token.literal.? };
+                    value.* = .{ .symbol = token.literal.? };
                     return value;
-                },
-                .string => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .string = token.literal.? };
-                    return value;
-                },
-                .character => {
-                    const c = lexer.Iterator.firstCodePoint(token.literal.?);
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .character = c };
-                    return value;
-                },
-                .integer => {
-                    const int = try std.fmt.parseInt(i64, token.literal.?, 10);
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .integer = int };
-                    return value;
-                },
-                .float => {
-                    const float = try std.fmt.parseFloat(f64, token.literal.?);
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .float = float };
-                    return value;
-                },
-                // .@"#{", .@"{", .@"[", .@"(", .@")", .@"]", .@"}" => {
-                .@"(" => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .list = std.ArrayList(*const Edn).init(allocator) };
-                    errdefer allocator.destroy(value);
-                    errdefer value.list.deinit();
+                }
+            },
+            .keyword => {
+                const value = try allocator.create(Edn);
+                // const keyword = try allocator.create(Keyword);
+                // keyword.name = token.literal.?;
+                // value.* = .{ .keyword = .{ .name = token.literal.? } };
+                value.* = .{ .keyword = token.literal.? };
+                return value;
+            },
+            .string => {
+                const value = try allocator.create(Edn);
+                value.* = .{ .string = token.literal.? };
+                return value;
+            },
+            .character => {
+                const c = lexer.Iterator.firstCodePoint(token.literal.?);
+                const value = try allocator.create(Edn);
+                value.* = .{ .character = c };
+                return value;
+            },
+            .integer => {
+                const int = try std.fmt.parseInt(i64, token.literal.?, 10);
+                const value = try allocator.create(Edn);
+                value.* = .{ .integer = int };
+                return value;
+            },
+            .float => {
+                const float = try std.fmt.parseFloat(f64, token.literal.?);
+                const value = try allocator.create(Edn);
+                value.* = .{ .float = float };
+                return value;
+            },
+            // .@"#{", .@"{", .@"[", .@"(", .@")", .@"]", .@"}" => {
+            .@"(" => {
+                const value = try allocator.create(Edn);
+                value.* = .{ .list = std.ArrayList(*const Edn).init(allocator) };
+                errdefer allocator.destroy(value);
+                errdefer value.list.deinit();
 
-                    while (iter.peek()) |token2| {
-                        switch (token2.tag) {
-                            .@"}", .@"]" => return error.ParenMismatch,
-                            .@")" => {
-                                _ = try iter.next();
-                                log.info("value len is {}", .{value.list.items.len});
-                                return value;
-                            },
-                            else => {
-                                const item = try readEdn(allocator, iter);
-                                try value.list.append(item);
-                            },
-                        }
+                while (iter.peek()) |token2| {
+                    switch (token2.tag) {
+                        .@"}", .@"]" => return error.ParenMismatch,
+                        .@")" => {
+                            _ = iter.next();
+                            log.info("value len is {}", .{value.list.items.len});
+                            return value;
+                        },
+                        else => {
+                            const item = try readEdn(allocator, iter);
+                            try value.list.append(item);
+                        },
                     }
-                    return error.@"collection delimiter";
-                },
-                .@"[" => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .vector = std.ArrayList(*const Edn).init(allocator) };
-                    errdefer allocator.destroy(value);
-                    errdefer value.vector.deinit();
+                }
+                return error.@"collection delimiter";
+            },
+            .@"[" => {
+                const value = try allocator.create(Edn);
+                value.* = .{ .vector = std.ArrayList(*const Edn).init(allocator) };
+                errdefer allocator.destroy(value);
+                errdefer value.vector.deinit();
 
-                    while (iter.peek()) |token2| {
-                        switch (token2.tag) {
-                            .@"}", .@")" => return error.ParenMismatch,
-                            .@"]" => {
-                                _ = try iter.next();
-                                return value;
-                            },
-                            else => {
-                                const item = try readEdn(allocator, iter);
-                                try value.vector.append(item);
-                            },
-                        }
+                while (iter.peek()) |token2| {
+                    switch (token2.tag) {
+                        .@"}", .@")" => return error.ParenMismatch,
+                        .@"]" => {
+                            _ = iter.next();
+                            return value;
+                        },
+                        else => {
+                            const item = try readEdn(allocator, iter);
+                            try value.vector.append(item);
+                        },
                     }
-                    return error.@"collection delimiter";
-                },
-                .@"#{" => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .hashset = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
-                    errdefer allocator.destroy(value);
-                    errdefer value.list.deinit();
+                }
+                return error.@"collection delimiter";
+            },
+            .@"#{" => {
+                const value = try allocator.create(Edn);
+                value.* = .{ .hashset = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
+                errdefer allocator.destroy(value);
+                errdefer value.list.deinit();
 
-                    while (iter.peek()) |token2| {
-                        switch (token2.tag) {
-                            .@")", .@"]" => return error.ParenMismatch,
-                            .@"}" => {
-                                _ = try iter.next();
-                                log.info("value len is {}", .{value.hashset.count()});
-                                return value;
-                            },
-                            else => {
-                                const item = try readEdn(allocator, iter);
-                                try value.hashset.put(item, item);
-                            },
-                        }
+                while (iter.peek()) |token2| {
+                    switch (token2.tag) {
+                        .@")", .@"]" => return error.ParenMismatch,
+                        .@"}" => {
+                            _ = iter.next();
+                            log.info("value len is {}", .{value.hashset.count()});
+                            return value;
+                        },
+                        else => {
+                            const item = try readEdn(allocator, iter);
+                            try value.hashset.put(item, item);
+                        },
                     }
-                    return error.@"collection delimiter";
-                },
-                .@"{" => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .hashmap = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
-                    errdefer allocator.destroy(value);
-                    errdefer value.hashmap.deinit();
+                }
+                return error.@"collection delimiter";
+            },
+            .@"{" => {
+                const value = try allocator.create(Edn);
+                value.* = .{ .hashmap = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
+                errdefer allocator.destroy(value);
+                errdefer value.hashmap.deinit();
 
-                    while (iter.peek()) |token2| {
-                        switch (token2.tag) {
-                            .@")", .@"]" => return error.ParenMismatch,
-                            .@"}" => {
-                                _ = try iter.next();
-                                log.info("hashmap len is {}", .{value.hashmap.count()});
-                                return value;
-                            },
-                            else => {
-                                const key = try readEdn(allocator, iter);
-                                // const val = try readEdn(allocator, iter);
-                                if (iter.peek()) |token3| {
-                                    switch (token3.tag) {
-                                        .@")", .@"]" => return error.ParenMismatch2,
-                                        .@"}" => return error.OddNumberHashMap,
-                                        else => {
-                                            const val = try readEdn(allocator, iter);
-                                            try value.hashmap.put(key, val);
-                                        },
-                                    }
-                                } else return error.OddNumberHashMap2;
-                            },
-                        }
+                while (iter.peek()) |token2| {
+                    switch (token2.tag) {
+                        .@")", .@"]" => return error.ParenMismatch,
+                        .@"}" => {
+                            _ = iter.next();
+                            log.info("hashmap len is {}", .{value.hashmap.count()});
+                            return value;
+                        },
+                        else => {
+                            const key = try readEdn(allocator, iter);
+                            // const val = try readEdn(allocator, iter);
+                            if (iter.peek()) |token3| {
+                                switch (token3.tag) {
+                                    .@")", .@"]" => return error.ParenMismatch2,
+                                    .@"}" => return error.OddNumberHashMap,
+                                    else => {
+                                        const val = try readEdn(allocator, iter);
+                                        try value.hashmap.put(key, val);
+                                    },
+                                }
+                            } else return error.OddNumberHashMap2;
+                        },
                     }
-                    return error.@"collection delimiter";
-                },
-                .@"#_" => {
-                    const t = try readEdn(allocator, iter);
-                    allocator.destroy(t);
-                    return readEdn(allocator, iter);
-                },
-                .tag => {
-                    // var value = allocator.create(Edn);
-                    return error.NotFinished;
-                },
-                else => {
-                    return error.@"edn still didn't implement type";
-                },
-            }
-        } else {
-            log.warn("got null", .{});
+                }
+                return error.@"collection delimiter";
+            },
+            .@"#_" => {
+                const t = try readEdn(allocator, iter);
+                allocator.destroy(t);
+                return readEdn(allocator, iter);
+            },
+            .tag => {
+                // var value = allocator.create(Edn);
+                return error.NotFinished;
+            },
+            else => {
+                return error.@"edn still didn't implement type";
+            },
         }
-    } else |err| {
-        log.err("got err {}", .{err});
+    } else {
+        log.warn("got null", .{});
     }
+
     return error.@"edn is an extensible data format";
 }
 const EdnReader = struct {
-    data_reader: std.StringHashMap(*const fn(allocator: mem.Allocator, edn: *Edn) usize),
+    buffer: []const u8,
+    iter: lexer.Iterator,
+    arena: std.heap.ArenaAllocator,
+    data_reader: std.StringHashMap(*const fn (allocator: mem.Allocator, edn: *Edn) usize) = undefined,
+
+    /// allocator is used to make arena allocator.
+    pub fn init(allocator: mem.Allocator, buffer: []const u8) EdnReader {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        var iter = lexer.Iterator.init(arena.allocator(), buffer);
+        return .{ .buffer = buffer, .iter = iter, .arena = arena };
+    }
+    pub fn deinit(self: *EdnReader) !void {
+        self.arena.deinit();
+    }
 };
+// I decided to keep keyword and symbol simple and we can compute each part (prefix,name) on demand.
 const Edn = union(enum) {
     nil: Nil,
     boolean: bool,
@@ -308,7 +319,7 @@ const Edn = union(enum) {
                 try writer.print("{s}", .{value.symbol});
             },
             .keyword => {
-                try writer.print(":{s}",.{value.keyword});
+                try writer.print(":{s}", .{value.keyword});
             },
             .list => {
                 try writer.writeAll("( ");
@@ -326,25 +337,25 @@ const Edn = union(enum) {
                 }
                 try writer.writeAll("]");
             },
-            .hashmap =>{
+            .hashmap => {
                 try writer.writeAll("{");
                 var iterator = value.hashmap.iterator();
-                while(iterator.next()) |entry| {
-                    try format(entry.key_ptr.*.*,fmt,options,writer);
+                while (iterator.next()) |entry| {
+                    try format(entry.key_ptr.*.*, fmt, options, writer);
                     try writer.writeAll(" ");
-                    try format(entry.value_ptr.*.*,fmt,options,writer);
-                    // try writer.writeAll(", ");
+                    try format(entry.value_ptr.*.*, fmt, options, writer);
+                    try writer.writeAll(", ");
                 }
                 try writer.writeAll("}");
             },
-            .hashset =>{
+            .hashset => {
                 try writer.writeAll("#{");
                 var iterator = value.hashset.iterator();
-                while(iterator.next()) |entry| {
-                    try format(entry.key_ptr.*.*,fmt,options,writer);
+                while (iterator.next()) |entry| {
+                    try format(entry.key_ptr.*.*, fmt, options, writer);
                     try writer.writeAll(" ");
-                    try format(entry.value_ptr.*.*,fmt,options,writer);
-                    // try writer.writeAll(", ");
+                    try format(entry.value_ptr.*.*, fmt, options, writer);
+                    try writer.writeAll(", ");
                 }
                 try writer.writeAll("}");
             },

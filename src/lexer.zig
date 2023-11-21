@@ -62,7 +62,7 @@ pub const Iterator = struct {
     pub fn peek(self: Iterator) ?Token {
         return self.window;
     }
-    pub fn next(self: *Iterator) !?Token {
+    pub fn next(self: *Iterator) ?Token {
         const next_token = self.next2();
         defer self.window = next_token catch null;
         return self.window;
