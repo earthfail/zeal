@@ -188,6 +188,60 @@ pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
                     }
                     return error.@"collection delimiter";
                 },
+                .@"#{" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .hashset = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
+                    errdefer allocator.destroy(value);
+                    errdefer value.list.deinit();
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@")", .@"]" => return error.ParenMismatch,
+                            .@"}" => {
+                                _ = try iter.next();
+                                log.info("value len is {}", .{value.hashset.count()});
+                                return value;
+                            },
+                            else => {
+                                const item = try readEdn(allocator, iter);
+                                try value.hashset.put(item, item);
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"{" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .hashmap = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
+                    errdefer allocator.destroy(value);
+                    errdefer value.hashmap.deinit();
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@")", .@"]" => return error.ParenMismatch,
+                            .@"}" => {
+                                _ = try iter.next();
+                                log.info("hashmap len is {}", .{value.hashmap.count()});
+                                return value;
+                            },
+                            else => {
+                                const key = try readEdn(allocator, iter);
+                                // const val = try readEdn(allocator, iter);
+                                if (iter.peek()) |token3| {
+                                    switch (token3.tag) {
+                                        .@")", .@"]" => return error.ParenMismatch2,
+                                        .@"}" => return error.OddNumberHashMap,
+                                        else => {
+                                            const val = try readEdn(allocator, iter);
+                                            try value.hashmap.put(key, val);
+                                        },
+                                    }
+                                } else return error.OddNumberHashMap2;
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
                 .@"#_" => {
                     const t = try readEdn(allocator, iter);
                     allocator.destroy(t);
@@ -227,6 +281,7 @@ const Edn = union(enum) {
     list: std.ArrayList(*const Edn),
     vector: std.ArrayList(*const Edn),
     hashmap: std.AutoArrayHashMap(*const Edn, *const Edn),
+    hashset: std.AutoArrayHashMap(*const Edn, *const Edn),
     tag: Tag,
     pub const Character = u21;
 
@@ -252,7 +307,9 @@ const Edn = union(enum) {
             .symbol => {
                 try writer.print("{s}", .{value.symbol});
             },
-
+            .keyword => {
+                try writer.print(":{s}",.{value.keyword});
+            },
             .list => {
                 try writer.writeAll("( ");
                 for (value.list.items) |item| {
@@ -268,6 +325,28 @@ const Edn = union(enum) {
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("]");
+            },
+            .hashmap =>{
+                try writer.writeAll("{");
+                var iterator = value.hashmap.iterator();
+                while(iterator.next()) |entry| {
+                    try format(entry.key_ptr.*.*,fmt,options,writer);
+                    try writer.writeAll(" ");
+                    try format(entry.value_ptr.*.*,fmt,options,writer);
+                    // try writer.writeAll(", ");
+                }
+                try writer.writeAll("}");
+            },
+            .hashset =>{
+                try writer.writeAll("#{");
+                var iterator = value.hashset.iterator();
+                while(iterator.next()) |entry| {
+                    try format(entry.key_ptr.*.*,fmt,options,writer);
+                    try writer.writeAll(" ");
+                    try format(entry.value_ptr.*.*,fmt,options,writer);
+                    // try writer.writeAll(", ");
+                }
+                try writer.writeAll("}");
             },
             else => {},
         }
