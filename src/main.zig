@@ -76,11 +76,11 @@ fn repl_edn() !void {
         try stdout.print("reading input:", .{});
         if (try nextLine(stdin, &buffer)) |input| {
             // if(input.len == 0) break;
-            var iter = lexer.Iterator.init(allocator,input);
+            var iter = try lexer.Iterator.init(allocator, input);
             if (readEdn(allocator, &iter)) |edn| {
-                try stdout.print("{}\n", .{edn});
-            } else |err|{
-                try stdout.print("got error reading input {}. Salam\n",.{err});
+                try stdout.print("{}\n", .{edn.*});
+            } else |err| {
+                try stdout.print("got error reading input {}. Salam\n", .{err});
                 // break;
             }
         } else break;
@@ -92,52 +92,117 @@ pub fn main() !void {
     // try repl_token();
     try repl_edn();
     // try readEdn("baby");
-
 }
-pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !Edn {
+pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
     // var iter = lexer.Iterator.init(allocator, str);
-    if (iter.next2()) |tok| {
+    if (iter.next()) |tok| {
         if (tok) |token| {
+            log.info("token is {}", .{token});
             switch (token.tag) {
                 // .nil => return Edn{ .nil = Edn.nil },
                 .symbol => {
                     if (mem.eql(u8, "true", token.literal.?)) {
-                        return Edn{ .boolean = true };
+                        return &Edn.true;
                     } else if (mem.eql(u8, "false", token.literal.?)) {
-                        return Edn{ .boolean = false };
+                        return &Edn.false;
                     } else if (mem.eql(u8, "nil", token.literal.?)) {
-                        return Edn{ .nil = Edn.nil };
-                    } else return Edn{ .symbol = token.literal.? };
+                        return &Edn.nil;
+                    } else {
+                        const value = try allocator.create(Edn);
+                        value.* = .{ .symbol = token.literal.? };
+                        return value;
+                    }
                 },
                 .keyword => {
-                    return Edn{ .keyword = token.literal.? };
+                    const value = try allocator.create(Edn);
+                    // const keyword = try allocator.create(Keyword);
+                    // keyword.name = token.literal.?;
+                    // value.* = .{ .keyword = .{ .name = token.literal.? } };
+                    value.* = .{ .keyword = token.literal.? };
+                    return value;
                 },
                 .string => {
-                    return Edn{ .string = token.literal.? };
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .string = token.literal.? };
+                    return value;
                 },
                 .character => {
-                    return Edn{ .character = token.literal.? };
+                    const c = lexer.Iterator.firstCodePoint(token.literal.?);
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .character = c };
+                    return value;
                 },
                 .integer => {
-                    const value = try std.fmt.parseInt(i64, token.literal.?, 10);
-                    return Edn{.integer = value};
+                    const int = try std.fmt.parseInt(i64, token.literal.?, 10);
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .integer = int };
+                    return value;
                 },
                 .float => {
-                    const value = try std.fmt.parseFloat(f64, token.literal.?);
-                    return Edn{.float = value};
+                    const float = try std.fmt.parseFloat(f64, token.literal.?);
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .float = float };
+                    return value;
                 },
-                .@"#{", .@"{", .@"[", .@"(", .@")", .@"]", .@"}" => {
-                    // return readEdn(allocator, iter);
+                // .@"#{", .@"{", .@"[", .@"(", .@")", .@"]", .@"}" => {
+                .@"(" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .list = std.ArrayList(*const Edn).init(allocator) };
+                    errdefer allocator.destroy(value);
+                    errdefer value.list.deinit();
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@"}", .@"]" => return error.ParenMismatch,
+                            .@")" => {
+                                _ = try iter.next();
+                                log.info("value len is {}", .{value.list.items.len});
+                                return value;
+                            },
+                            else => {
+                                const item = try readEdn(allocator, iter);
+                                try value.list.append(item);
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"[" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .vector = std.ArrayList(*const Edn).init(allocator) };
+                    errdefer allocator.destroy(value);
+                    errdefer value.vector.deinit();
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@"}", .@")" => return error.ParenMismatch,
+                            .@"]" => {
+                                _ = try iter.next();
+                                return value;
+                            },
+                            else => {
+                                const item = try readEdn(allocator, iter);
+                                try value.vector.append(item);
+                            },
+                        }
+                    }
                     return error.@"collection delimiter";
                 },
                 .@"#_" => {
-                    _ = try readEdn(allocator, iter);
-                    return readEdn(allocator,iter);
+                    const t = try readEdn(allocator, iter);
+                    allocator.destroy(t);
+                    return readEdn(allocator, iter);
                 },
-                else => {return error.NotFinished;}
+                .tag => {
+                    // var value = allocator.create(Edn);
+                    return error.NotFinished;
+                },
+                else => {
+                    return error.@"edn still didn't implement type";
+                },
             }
         } else {
-            log.info("got null", .{});
+            log.warn("got null", .{});
         }
     } else |err| {
         log.err("got err {}", .{err});
@@ -152,54 +217,25 @@ const Edn = union(enum) {
     boolean: bool,
     // string: [:0]const u8,
     string: []const u8,
-    character: []const u8, // TODO: use u21 type
+    character: u21,
 
-    symbol: []const u8, // TODO: consider using Symbols
-    keyword: []const u8, // TODO: consider using Keyword
+    symbol: []const u8,
+    keyword: Keyword,
 
     integer: i64,
     float: f64,
-    list: std.ArrayList(*Edn),
-    hashmap: std.AutoArrayHashMap(*Edn, *Edn),
-
+    list: std.ArrayList(*const Edn),
+    vector: std.ArrayList(*const Edn),
+    hashmap: std.AutoArrayHashMap(*const Edn, *const Edn),
+    tag: Tag,
     pub const Character = u21;
 
     const Nil = enum { nil };
-    pub const nil = Nil.nil;
+    pub const nil = Edn{ .nil = Nil.nil };
+    pub const @"true" = Edn{ .boolean = true };
+    pub const @"false" = Edn{ .boolean = false };
 
-    pub const Symbol = struct {
-        namespace: ?[]const u8,
-        name: []const u8,
-
-        pub fn format(value: Symbol, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = options;
-            _ = fmt;
-            try writer.writeAll("Symbol ");
-            if (value.namespace) |namespace| {
-                try writer.writeAll(namespace);
-                try writer.writeAll("/");
-            }
-            try writer.writeAll(value.name);
-        }
-    };
-    pub const Keyword = struct {
-        namespace: ?[]const u8,
-        name: []const u8,
-
-        pub fn format(value: Keyword, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = options;
-            _ = fmt;
-            try writer.writeAll("Keyword #");
-            if (value.namespace) |namespace| {
-                try writer.writeAll(namespace);
-                try writer.writeAll("/");
-            }
-            try writer.writeAll(value.name);
-        }
-    };
     pub fn format(value: Edn, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
         switch (value) {
             .nil => try writer.writeAll("nil"),
             .boolean => {
@@ -211,9 +247,66 @@ const Edn = union(enum) {
                 try writer.print("\"{s}\"", .{value.string});
             },
             .character => {
-                try writer.print("\\{s}", .{value.character});
+                try writer.print("\\{u}", .{value.character});
+            },
+            .symbol => {
+                try writer.print("{s}", .{value.symbol});
+            },
+
+            .list => {
+                try writer.writeAll("( ");
+                for (value.list.items) |item| {
+                    try format(item.*, fmt, options, writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll(" )");
+            },
+            .vector => {
+                try writer.writeAll("[");
+                for (value.vector.items) |item| {
+                    try format(item.*, fmt, options, writer);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("]");
             },
             else => {},
         }
     }
 };
+pub const Tag = struct {
+    tag: []const u8,
+    element: union { edn: *Edn, pointer: usize },
+};
+
+pub const Symbol = []const u8;
+// pub const Symbol = struct {
+//     name: []const u8,
+
+//     pub fn format(value: Symbol, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+//         _ = options;
+//         _ = fmt;
+//         try writer.writeAll("Symbol ");
+//         if (value.namespace) |namespace| {
+//             try writer.writeAll(namespace);
+//             try writer.writeAll("/");
+//         }
+//         try writer.writeAll(value.name);
+//     }
+// };
+
+// using struct just to implement format.
+pub const Keyword = []const u8;
+// pub const Keyword = struct {
+//     name: []const u8,
+
+//     pub fn format(value: Keyword, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+//         _ = options;
+//         _ = fmt;
+//         try writer.writeAll("Keyword #");
+//         if (value.namespace) |namespace| {
+//             try writer.writeAll(namespace);
+//             try writer.writeAll("/");
+//         }
+//         try writer.writeAll(value.name);
+//     }
+// };
