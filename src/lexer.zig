@@ -29,7 +29,7 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     const stdio = std.io.getStdOut().writer();
 
     var edn_iter = try Iterator.init(g_allocator, s);
-    var tok = edn_iter.next();
+   var tok = edn_iter.next();
     while (tok) |toke| : (tok = edn_iter.next()) {
         if (toke) |token| {
             defer if (token.literal) |c| {
@@ -235,6 +235,7 @@ pub const Iterator = struct {
         }
         // read int
         try self.readDigits(&output);
+        lexer_log.info("first read {s}",.{output.items});
         // I will ignore exact precision for floating point number and arbitrary precision for integers
         if (self.iter.peekSlice()) |differentiator| {
             const c = firstCodePoint(differentiator);
@@ -252,6 +253,8 @@ pub const Iterator = struct {
                     } else return error.InvalidNumber;
                 },
                 else => {
+                    if(isSeparator(differentiator) or isDelimiter(differentiator))
+                        return .{ .tag = Tag.integer, .literal = try output.toOwnedSlice()};
                     var fract = false;
                     var exp = false;
                     if ('.' == c) { // fraction part
