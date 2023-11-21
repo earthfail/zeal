@@ -17,7 +17,7 @@ pub const std_options = struct {
     // Define logFn to override the std implementation
     // pub const logFn = myLogFn;
 };
-
+const lexer_log = std.log.scoped(.lexer);
 
 const ziglyph = @import("ziglyph");
 const Grapheme = ziglyph.Grapheme;
@@ -28,16 +28,15 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     std.debug.print("s={any}\n", .{s.ptr});
     const stdio = std.io.getStdOut().writer();
 
-    var edn_iter = Iterator.init(g_allocator, s);
-    var tok = edn_iter.next2();
-    while (tok) |toke| : (tok = edn_iter.next2()) {
+    var edn_iter = try Iterator.init(g_allocator, s);
+    var tok = edn_iter.next();
+    while (tok) |toke| : (tok = edn_iter.next()) {
         if (toke) |token| {
             defer if (token.literal) |c| {
                 if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
                     edn_iter.allocator.free(c);
             };
-            try stdio.print("got '{s}' {}\n", .{token,token.tag});
-
+            try stdio.print("got '{s}' {}\n", .{ token, token.tag });
         } else {
             try stdio.print("got null\n", .{});
             break;
@@ -50,17 +49,27 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
 pub const Iterator = struct {
     iter: MyGraphemeIter,
     allocator: mem.Allocator = undefined,
+    window: ?Token = undefined,
 
     const Self = @This();
     const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, NotFinished };
-    pub fn init(allocator: mem.Allocator, str: []const u8) Iterator {
+    pub fn init(allocator: mem.Allocator, str: []const u8) !Iterator {
         var iter = MyGraphemeIter.init(str);
         var self = Iterator{ .allocator = allocator, .iter = iter };
+        self.window = try self.next2();
         return self;
     }
+    pub fn peek(self: Iterator) ?Token {
+        return self.window;
+    }
+    pub fn next(self: *Iterator) !?Token {
+        const next_token = self.next2();
+        defer self.window = next_token catch null;
+        return self.window;
+    }
     pub fn next2(self: *Iterator) !?Token {
-        log.debug("                first char '{s}' {0any}", .{self.iter.peekSlice() orelse "START"});
-        defer log.debug("                last char '{s}' {0any}", .{self.iter.peekSlice() orelse "EOF"});
+        lexer_log.debug("                first char '{s}' {0any}", .{self.iter.peekSlice() orelse "START"});
+        defer lexer_log.debug("                last char '{s}' {0any}", .{self.iter.peekSlice() orelse "EOF"});
 
         self.ignoreSeparator();
         const c = self.iter.peekSlice();
@@ -357,7 +366,7 @@ pub const Iterator = struct {
                 return IterError.SymbolErr;
             if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
                 return IterError.SymbolErr;
-                // return error.e1;
+            // return error.e1;
             if ('/' == firstu21) {
                 empty_prefix = true;
                 encountered_slash = true;
@@ -461,7 +470,7 @@ pub const Iterator = struct {
         // 10 0x0a \n, 13 0x0d \r
         return ascii.isASCII(ascii_c) and (ascii.isWhitespace(ascii_c) or ascii_c == ',');
     }
-    fn firstCodePoint(c: []const u8) u21 {
+    pub fn firstCodePoint(c: []const u8) u21 {
         var fis = std.io.fixedBufferStream(c);
         const reader = fis.reader();
         const code_point = ziglyph.readCodePoint(reader) catch unreachable;
@@ -489,10 +498,6 @@ pub const Iterator = struct {
         } else {
             return;
         }
-    }
-    /// return zero length if there is nothing to peek at
-    pub fn peek2(self: *Iterator) ?[]const u8 {
-        return self.iter.peekSlice();
     }
 };
 /// implement peek for Grapheme.GraphemeIterator
@@ -559,12 +564,12 @@ pub const Token = struct {
             .@"]" => try writer.writeAll("]"),
             .@"#{" => try writer.writeAll("#{"),
             .@"#_" => try writer.writeAll("#_"),
-            .nil => try writer.writeAll("nil"),
-            .boolean => {
-                if (value.literal) |b| {
-                    try writer.writeAll(b);
-                } else try writer.writeAll("null bool");
-            },
+            // .nil => try writer.writeAll("nil"),
+            // .boolean => {
+            //     if (value.literal) |b| {
+            //         try writer.writeAll(b);
+            //     } else try writer.writeAll("null bool");
+            // },
             .string => {
                 if (value.literal) |s| {
                     try writer.writeAll("\"");
@@ -676,9 +681,9 @@ test "test characters and strings" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
 
-        var iterator = Iterator.init(arena.allocator(), s);
-        var tok = iterator.next2();
-        while (tok) |toke| : (tok = iterator.next2()) {
+        var iterator = try Iterator.init(arena.allocator(), s);
+        var tok = iterator.next();
+        while (tok) |toke| : (tok = iterator.next()) {
             if (toke) |token| {
                 defer if (token.literal) |c| {
                     if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.tag)
@@ -724,9 +729,9 @@ test "test symbols" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
 
-        var iterator = Iterator.init(arena.allocator(), in);
-        var tok = iterator.next2();
-        while (tok) |toke| : (tok = iterator.next2()) {
+        var iterator = try Iterator.init(arena.allocator(), in);
+        var tok = iterator.next();
+        while (tok) |toke| : (tok = iterator.next()) {
             if (toke) |token| {
                 defer if (token.literal) |c| {
                     if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.tag)
