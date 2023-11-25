@@ -76,11 +76,14 @@ fn repl_edn() !void {
         try stdout.print("reading input:", .{});
         if (try nextLine(stdin, &buffer)) |input| {
             // if(input.len == 0) break;
-            var iter = try lexer.Iterator.init(allocator, input);
+            var iter = lexer.Iterator.init(allocator, input) catch |err| blk: {
+                try stdout.print("error in tokenizing {}. Salam\n",.{err});
+                break :blk try lexer.Iterator.init(allocator, "subhanaAllah");
+            };
             if (readEdn(allocator, &iter)) |edn| {
                 try stdout.print("{}\n", .{edn.*});
             } else |err| {
-                try stdout.print("got error reading input {}. Salam\n", .{err});
+                try stdout.print("got error parsing input {}. Salam\n", .{err});
                 // break;
             }
         } else break;
@@ -289,12 +292,16 @@ const Edn = union(enum) {
 
     integer: i64,
     float: f64,
-    list: std.ArrayList(*const Edn),
-    vector: std.ArrayList(*const Edn),
-    hashmap: std.AutoArrayHashMap(*const Edn, *const Edn),
-    hashset: std.AutoArrayHashMap(*const Edn, *const Edn),
+    list: List,
+    vector: Vector,
+    hashmap: Hashmap,
+    hashset: Hashset,
     tag: Tag,
     pub const Character = u21;
+    pub const List = std.ArrayList(*const Edn);
+    pub const Vector = std.ArrayList(*const Edn);
+    pub const Hashmap = std.AutoArrayHashMap(*const Edn, *const Edn);
+    pub const Hashset = std.AutoArrayHashMap(*const Edn, *const Edn);
 
     const Nil = enum { nil };
     pub const nil = Edn{ .nil = Nil.nil };
@@ -309,17 +316,23 @@ const Edn = union(enum) {
                     try writer.writeAll("true");
                 } else try writer.writeAll("false");
             },
-            .string => {
-                try writer.print("\"{s}\"", .{value.string});
-            },
-            .character => {
-                try writer.print("\\{u}", .{value.character});
-            },
             .symbol => {
                 try writer.print("{s}", .{value.symbol});
             },
             .keyword => {
                 try writer.print(":{s}", .{value.keyword});
+            },
+            .integer => {
+                try writer.print("{d}", .{value.integer});
+            },
+            .float => {
+                try writer.print("{d}",.{value.float});
+            },
+            .character => {
+                try writer.print("\\{u}", .{value.character});
+            },
+            .string => {
+                try writer.print("\"{s}\"", .{value.string});
             },
             .list => {
                 try writer.writeAll("( ");
