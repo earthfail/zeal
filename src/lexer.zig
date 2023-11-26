@@ -29,20 +29,14 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     const stdio = std.io.getStdOut().writer();
 
     var edn_iter = try Iterator.init(g_allocator, s);
-   var tok = edn_iter.next();
-    while (tok) |toke| : (tok = edn_iter.next()) {
-        if (toke) |token| {
-            defer if (token.literal) |c| {
-                if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
-                    edn_iter.allocator.free(c);
-            };
-            try stdio.print("got '{s}' {}\n", .{ token, token.tag });
-        } else {
-            try stdio.print("got null\n", .{});
-            break;
-        }
-    } else |err| {
-        try stdio.print("got err {}\n", .{err});
+    while (edn_iter.next()) |token| {
+        defer if (token.literal) |c| {
+            if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
+                edn_iter.allocator.free(c);
+        };
+        try stdio.print("got '{s}' {}\n", .{ token, token.tag });
+    } else {
+        try stdio.print("got null\n", .{});
     }
 }
 
@@ -235,13 +229,13 @@ pub const Iterator = struct {
         }
         // read int
         try self.readDigits(&output);
-        lexer_log.info("first read {s}",.{output.items});
+        lexer_log.info("first read {s}", .{output.items});
         // I will ignore exact precision for floating point number and arbitrary precision for integers
         if (self.iter.peekSlice()) |differentiator| {
             const c = firstCodePoint(differentiator);
             switch (c) {
                 'N' => {
-                    _ = self.iter.nextSlice();
+                    try output.appendSlice(self.iter.nextSlice().?);
                     if (self.iter.peekSlice() == null or isSeparator(self.iter.peekSlice().?)) {
                         return .{ .literal = try output.toOwnedSlice(), .tag = Tag.integer };
                     } else return error.InvalidNumber;
@@ -253,8 +247,8 @@ pub const Iterator = struct {
                     } else return error.InvalidNumber;
                 },
                 else => {
-                    if(isSeparator(differentiator) or isDelimiter(differentiator))
-                        return .{ .tag = Tag.integer, .literal = try output.toOwnedSlice()};
+                    if (isSeparator(differentiator) or isDelimiter(differentiator))
+                        return .{ .tag = Tag.integer, .literal = try output.toOwnedSlice() };
                     var fract = false;
                     var exp = false;
                     if ('.' == c) { // fraction part

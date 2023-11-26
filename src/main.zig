@@ -3,6 +3,7 @@
 const std = @import("std");
 const log = std.log;
 const mem = std.mem;
+const big = std.math.big;
 const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
@@ -77,10 +78,11 @@ fn repl_edn() !void {
         if (try nextLine(stdin, &buffer)) |input| {
             // if(input.len == 0) break;
             var iter = lexer.Iterator.init(allocator, input) catch |err| blk: {
-                try stdout.print("error in tokenizing {}. Salam\n",.{err});
+                try stdout.print("error in tokenizing {}. Salam\n", .{err});
                 break :blk try lexer.Iterator.init(allocator, "subhanaAllah");
             };
             if (readEdn(allocator, &iter)) |edn| {
+                log.info("type {s}, value:", .{@tagName(edn.*)});
                 try stdout.print("{}\n", .{edn.*});
             } else |err| {
                 try stdout.print("got error parsing input {}. Salam\n", .{err});
@@ -135,10 +137,25 @@ pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
                 return value;
             },
             .integer => {
-                const int = try std.fmt.parseInt(i64, token.literal.?, 10);
+                const literal = token.literal.?;
                 const value = try allocator.create(Edn);
-                value.* = .{ .integer = int };
-                return value;
+                if (literal[literal.len - 1] == 'N') {
+                    var v = try big.int.Managed.init(allocator);
+                    try v.setString(10, literal[0 .. literal.len - 1]);
+                    value.* = .{ .bigInteger = v };
+                    return value;
+                } else {
+                    const int = std.fmt.parseInt(i64, literal, 10);
+                    if (int) |int2| {
+                        value.* = .{ .integer = int2 };
+                        return value;
+                    } else |_| {
+                        var v = try big.int.Managed.init(allocator);
+                        try v.setString(10, literal);
+                        value.* = .{ .bigInteger = v };
+                        return value;
+                    }
+                }
             },
             .float => {
                 const float = try std.fmt.parseFloat(f64, token.literal.?);
@@ -291,6 +308,7 @@ const Edn = union(enum) {
     keyword: Keyword,
 
     integer: i64,
+    bigInteger: std.math.big.int.Managed,
     float: f64,
     list: List,
     vector: Vector,
@@ -325,8 +343,16 @@ const Edn = union(enum) {
             .integer => {
                 try writer.print("{d}", .{value.integer});
             },
+            .bigInteger => {
+                const big_int = value.bigInteger;
+                const alloc = big_int.allocator;
+                const case: std.fmt.Case = .lower;
+                const string_rep = big_int.toString(alloc,10,case) catch return;
+                defer alloc.free(string_rep);
+                try writer.print("{s}", .{string_rep});
+            },
             .float => {
-                try writer.print("{d}",.{value.float});
+                try writer.print("{d}", .{value.float});
             },
             .character => {
                 try writer.print("\\{u}", .{value.character});
