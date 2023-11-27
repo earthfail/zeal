@@ -264,7 +264,8 @@ pub const Iterator = struct {
                     if ('e' == c2 or 'E' == c2) {
                         try output.appendSlice(self.iter.nextSlice().?);
                         if (self.iter.peekSlice()) |d| {
-                            if (ziglyph.isAsciiDigit(firstCodePoint(d))) {
+                            const d1 = firstCodePoint(d);
+                            if (ziglyph.isAsciiDigit(d1) or '-' == d1 or '+' == d1) {
                                 try self.readSign(&output);
                                 try self.readDigits(&output);
                                 exp = true;
