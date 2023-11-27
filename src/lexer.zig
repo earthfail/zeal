@@ -241,7 +241,7 @@ pub const Iterator = struct {
                     } else return error.InvalidNumber;
                 },
                 'M' => {
-                    _ = self.iter.nextSlice();
+                    try output.appendSlice(self.iter.nextSlice().?);
                     if (self.iter.peekSlice() == null or isSeparator(self.iter.peekSlice().?)) {
                         return .{ .literal = try output.toOwnedSlice(), .tag = Tag.float };
                     } else return error.InvalidNumber;

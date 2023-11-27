@@ -139,31 +139,75 @@ pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
             .integer => {
                 const literal = token.literal.?;
                 const value = try allocator.create(Edn);
+                errdefer allocator.destroy(value);
                 if (literal[literal.len - 1] == 'N') {
-                    var v = try big.int.Managed.init(allocator);
-                    try v.setString(10, literal[0 .. literal.len - 1]);
-                    value.* = .{ .bigInteger = v };
+                    value.* = .{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
                     return value;
                 } else {
-                    const int = std.fmt.parseInt(i64, literal, 10);
-                    if (int) |int2| {
-                        value.* = .{ .integer = int2 };
+                    if (std.fmt.parseInt(i64, literal, 10)) |int| {
+                        value.* = .{ .integer = int };
                         return value;
                     } else |_| {
-                        var v = try big.int.Managed.init(allocator);
-                        try v.setString(10, literal);
-                        value.* = .{ .bigInteger = v };
+                        value.* = .{ .bigInteger = try readBigInteger(allocator, literal) };
                         return value;
                     }
                 }
             },
             .float => {
-                const float = try std.fmt.parseFloat(f64, token.literal.?);
+                const literal = token.literal.?;
                 const value = try allocator.create(Edn);
-                value.* = .{ .float = float };
-                return value;
+                errdefer allocator.destroy(value);
+                if (literal[literal.len - 1] == 'M') {
+                    var a = try readBigInteger(allocator, literal[0 .. literal.len - 1]);
+                    defer a.deinit();
+                    var f = try big.Rational.init(allocator);
+                    try f.copyInt(a);
+                    value.* = .{ .bigFloat = f };
+                    return value;
+                } else {
+                    if (std.fmt.parseFloat(f64, literal)) |float| {
+                        value.* = .{ .float = float };
+                        return value;
+                    } else |err| {
+                        return err;
+                        // TODO: decide the limits of exact precision floating numbers
+                        // var whole_end: usize = 0;
+                        // if (literal[0] == '+' or literal[0] == '-')
+                        //     whole_end += 1;
+                        // while (whole_end < literal.len) : (whole_end += 1) {
+                        //     if (literal[whole_end] == '.' or literal[whole_end] == 'e' or literal[whole_end] == 'E')
+                        //         break;
+                        // }
+                        // var frac_end = whole_end;
+                        // while (frac_end < literal.len) : (frac_end += 1) {
+                        //     if (literal[frac_end] == 'e' or literal[frac_end] == 'E')
+                        //         break;
+                        // }
+                        // // whole_end <= frac_end <= literal.len is true
+                        // const whole_part = try readBigInteger(allocator, literal[0..whole_end]);
+                        // const frac_part = if (whole_end + 1 < frac_end)
+                        //     try readBigInteger(allocator, literal[whole_end + 1 .. frac_end])
+                        // else blk: {
+                        //     var frac = try big.int.Managed.init(allocator);
+                        //     frac.set(0);
+                        //     break :blk frac;
+                        // };
+                        // const exp_part = if (frac_end == literal.len) blk: {
+                        //     var exp = try big.int.Managed.init(allocator);
+                        //     exp.set(0);
+                        //     break :blk exp;
+                        // } else try readBigInteger(allocator, literal[frac_end + 1 ..]);
+                        // {
+                        //     whole_part.dump();
+                        //     frac_part.dump();
+                        //     exp_part.dump();
+                        // }
+                        // const frac_size = frac_end - whole_end - 1;
+                        
+                    }
+                    // const value = try allocator.create(Edn);
+                }
             },
-            // .@"#{", .@"{", .@"[", .@"(", .@")", .@"]", .@"}" => {
             .@"(" => {
                 const value = try allocator.create(Edn);
                 value.* = .{ .list = std.ArrayList(*const Edn).init(allocator) };
@@ -280,6 +324,12 @@ pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
 
     return error.@"edn is an extensible data format";
 }
+pub fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !big.int.Managed {
+    var v = try big.int.Managed.init(allocator);
+    try v.setString(10, buffer);
+    std.debug.print("inside {*}\n", .{&v});
+    return v;
+}
 const EdnReader = struct {
     buffer: []const u8,
     iter: lexer.Iterator,
@@ -310,6 +360,7 @@ const Edn = union(enum) {
     integer: i64,
     bigInteger: std.math.big.int.Managed,
     float: f64,
+    bigFloat: std.math.big.Rational,
     list: List,
     vector: Vector,
     hashmap: Hashmap,
@@ -347,12 +398,28 @@ const Edn = union(enum) {
                 const big_int = value.bigInteger;
                 const alloc = big_int.allocator;
                 const case: std.fmt.Case = .lower;
-                const string_rep = big_int.toString(alloc,10,case) catch return;
+                const string_rep = big_int.toString(alloc, 10, case) catch return;
                 defer alloc.free(string_rep);
-                try writer.print("{s}", .{string_rep});
+                try writer.print("{s}N", .{string_rep});
             },
             .float => {
                 try writer.print("{d}", .{value.float});
+            },
+            .bigFloat => {
+                const big_float = value.bigFloat;
+                const num_alloc = big_float.p.allocator;
+                const den_alloc = big_float.q.allocator;
+                const case: std.fmt.Case = .lower;
+                const num_string = big_float.p.toString(num_alloc, 10, case) catch return;
+                const den_string = big_float.q.toString(den_alloc, 10, case) catch {
+                    num_alloc.free(num_string);
+                    return;
+                };
+                defer num_alloc.free(num_string);
+                defer den_alloc.free(den_string);
+                if (mem.eql(u8, "1", den_string)) {
+                    try writer.print("{s}M", .{num_string});
+                } else unreachable;
             },
             .character => {
                 try writer.print("\\{u}", .{value.character});
