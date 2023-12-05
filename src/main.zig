@@ -312,7 +312,18 @@ pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
             },
             .tag => {
                 // var value = allocator.create(Edn);
-                return error.NotFinished;
+                var value = try allocator.create(Edn);
+                errdefer allocator.destroy(value);
+
+                const tag_value = try readEdn(allocator, iter);
+
+                var tag_element = try allocator.create(Tag);
+                errdefer allocator.destroy(tag_element);
+                tag_element.tag = token.literal.?;
+                tag_element.element = .{ .edn = tag_value };
+                value.* = .{ .tag = tag_element.* };
+
+                return value;
             },
             else => {
                 return error.@"edn still didn't implement type";
@@ -377,6 +388,40 @@ const Edn = union(enum) {
     pub const @"true" = Edn{ .boolean = true };
     pub const @"false" = Edn{ .boolean = false };
 
+    pub fn deinit(self: *Edn, alloc: mem.Allocator) !void {
+        switch (self) {
+            .nil, .boolean => {
+                return;
+            },
+            .string, .character, .symbol, .keyword, .integer, .float => {
+                alloc.destroy(self);
+            },
+            .bigInteger => {
+                alloc.destroy(self.bigInteger);
+                alloc.destroy(self);
+            },
+            .bigFloat => {
+                alloc.destroy(self.bigFloat);
+                alloc.destroy(self);
+            },
+            .list => {
+                self.list.deinit();
+                alloc.destroy(self);
+            },
+            .vector => {
+                self.vector.deinit();
+                alloc.destroy(self);
+            },
+            .hashmap => {
+                self.hashmap.deinit();
+                alloc.destroy(self);
+            },
+            .hashset => {
+                self.hashset.deinit();
+                alloc.destroy(self);
+            },
+        }
+    }
     pub fn format(value: Edn, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         switch (value) {
             .nil => try writer.writeAll("nil"),
@@ -465,13 +510,16 @@ const Edn = union(enum) {
                 }
                 try writer.writeAll("}");
             },
-            else => {},
+            .tag => {
+                try writer.print("#{s} ",.{value.tag.tag});
+                try format(value.tag.element.edn.*,fmt,options,writer);
+            },
         }
     }
 };
 pub const Tag = struct {
     tag: []const u8,
-    element: union { edn: *Edn, pointer: usize },
+    element: union { edn: *const Edn, pointer: usize },
 };
 
 pub const Symbol = []const u8;
