@@ -30,10 +30,11 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
 
     var edn_iter = try Iterator.init(g_allocator, s);
     while (edn_iter.next()) |token| {
-        defer if (token.literal) |c| {
-            if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
-                edn_iter.allocator.free(c);
-        };
+        defer token.deinit(g_allocator);
+        // defer if (token.literal) |c| {
+        //     if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
+        //         edn_iter.allocator.free(c);
+        // };
         try stdio.print("got '{s}' {}\n", .{ token, token.tag });
     } else {
         try stdio.print("got null\n", .{});
@@ -47,11 +48,16 @@ pub const Iterator = struct {
 
     const Self = @This();
     const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, NotFinished };
-    pub fn init(allocator: mem.Allocator, str: []const u8) !Iterator {
+    pub fn init(allocator: mem.Allocator, str: []const u8) Iterator {
         var iter = MyGraphemeIter.init(str);
         var self = Iterator{ .allocator = allocator, .iter = iter };
-        self.window = try self.next2();
+        self.window = self.next2() catch null;
         return self;
+    }
+    pub fn deinit(self: *Self) void {
+        if (self.window) |*window| {
+            window.deinit(self.allocator);
+        }
     }
     pub fn peek(self: Iterator) ?Token {
         return self.window;
@@ -229,7 +235,7 @@ pub const Iterator = struct {
         }
         // read int
         try self.readDigits(&output);
-        lexer_log.info("first read {s}", .{output.items});
+        lexer_log.debug("first read {s}", .{output.items});
         // I will ignore exact precision for floating point number and arbitrary precision for integers
         if (self.iter.peekSlice()) |differentiator| {
             const c = firstCodePoint(differentiator);
@@ -549,7 +555,16 @@ fn debugMyGraphemeIter(s: []const u8) void {
 pub const Token = struct {
     tag: Tag,
     literal: ?[]const u8 = null,
-
+    pub fn deinit(self: *const Token, allocator: mem.Allocator) void {
+        if (self.literal) |c| {
+            switch (self.tag) {
+                .character, .string, .symbol, .integer, .float, .keyword, .tag => {
+                    allocator.free(c);
+                },
+                else => {},
+            }
+        }
+    }
     pub fn format(value: Token, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;

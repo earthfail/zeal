@@ -39,9 +39,9 @@ fn repl_token() !void {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) expect(false) catch @panic("leaked");
     }
-    var arena = std.heap.ArenaAllocator.init(g_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    // var arena = std.heap.ArenaAllocator.init(g_allocator);
+    // defer arena.deinit();
+    // const allocator = arena.allocator();
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
@@ -50,24 +50,31 @@ fn repl_token() !void {
     while (true) {
         try stdout.print("reading input:", .{});
         if (try nextLine(stdin, &buffer)) |input| {
-            // if(input.len == 0) break;
-            try lexer.lexString(allocator, input);
+            if (input.len == 0) break;
+            try lexer.lexString(g_allocator, input);
+            // var reader = lexer.IterReader.init(g_allocator, input);
+            // defer reader.deinit();
+            // try reader.lexing();
+            if (gpa.detectLeaks()) {
+                log.err("token iterator leaked input address {*} and '{s}'", .{ input, input });
+            }
         } else break;
     }
     try stdout.print("finished\n", .{});
 }
 fn repl_edn() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(
+    //.{ .verbose_log = true, .retain_metadata = true }
+    .{}){};
     const g_allocator = gpa.allocator();
     defer {
-        _ = gpa.detectLeaks();
+        // _ = gpa.detectLeaks();
 
         const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) expect(false) catch @panic("leaked");
+        if (deinit_status == .leak) expect(false) catch {
+            @panic("gpa leaked");
+        };
     }
-    var arena = std.heap.ArenaAllocator.init(g_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
@@ -77,13 +84,27 @@ fn repl_edn() !void {
         try stdout.print("reading input:", .{});
         if (try nextLine(stdin, &buffer)) |input| {
             // if(input.len == 0) break;
-            var iter = lexer.Iterator.init(allocator, input) catch |err| blk: {
-                try stdout.print("error in tokenizing {}. Salam\n", .{err});
-                break :blk try lexer.Iterator.init(allocator, "subhanaAllah");
-            };
-            if (readEdn(allocator, &iter)) |edn| {
-                log.info("type {s}, value:", .{@tagName(edn.*)});
+            // var iter = lexer.Iterator.init(allocator, input) catch |err| blk: {
+            //     try stdout.print("error in tokenizing {}. Salam\n", .{err});
+            //     break :blk try lexer.Iterator.init(allocator, "subhanaAllah");
+            // };
+            // var arena = std.heap.ArenaAllocator.init(g_allocator);
+            defer {
+                // std.debug.print("arena deinit\n", .{});
+                // arena.deinit();
+                if (gpa.detectLeaks()) {
+                    std.debug.print("gpa detected leaks with input '{s}'\n", .{input});
+                }
+            }
+            // const allocator = arena.allocator();
+            var reader = EdnReader.init(g_allocator, input);
+            defer reader.deinit();
+            // if (EdnReader.readEdn(allocator, &iter)) |edn| {
+            while (reader.readEdn()) |edn| {
+                log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
                 try stdout.print("{}\n", .{edn.*});
+
+                edn.deinit(g_allocator);
             } else |err| {
                 try stdout.print("got error parsing input {}. Salam\n", .{err});
                 // break;
@@ -94,246 +115,27 @@ fn repl_edn() !void {
 }
 // clojure koans
 pub fn main() !void {
+    std.debug.print("{} {} {} {} {}\n", .{ @sizeOf(EdnReader), @sizeOf(Edn), @sizeOf(big.Rational), @sizeOf(lexer.Iterator), @sizeOf(lexer.Token) });
     // try repl_token();
     try repl_edn();
     // try readEdn("baby");
-}
-pub fn readEdn(allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
-    // var iter = lexer.Iterator.init(allocator, str);
-    if (iter.next()) |token| {
-        log.info("token is {}", .{token});
-        switch (token.tag) {
-            // .nil => return Edn{ .nil = Edn.nil },
-            .symbol => {
-                if (mem.eql(u8, "true", token.literal.?)) {
-                    return &Edn.true;
-                } else if (mem.eql(u8, "false", token.literal.?)) {
-                    return &Edn.false;
-                } else if (mem.eql(u8, "nil", token.literal.?)) {
-                    return &Edn.nil;
-                } else {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .symbol = token.literal.? };
-                    return value;
-                }
-            },
-            .keyword => {
-                const value = try allocator.create(Edn);
-                // const keyword = try allocator.create(Keyword);
-                // keyword.name = token.literal.?;
-                // value.* = .{ .keyword = .{ .name = token.literal.? } };
-                value.* = .{ .keyword = token.literal.? };
-                return value;
-            },
-            .string => {
-                const value = try allocator.create(Edn);
-                value.* = .{ .string = token.literal.? };
-                return value;
-            },
-            .character => {
-                const c = lexer.Iterator.firstCodePoint(token.literal.?);
-                const value = try allocator.create(Edn);
-                value.* = .{ .character = c };
-                return value;
-            },
-            .integer => {
-                const literal = token.literal.?;
-                const value = try allocator.create(Edn);
-                errdefer allocator.destroy(value);
-                if (literal[literal.len - 1] == 'N') {
-                    value.* = .{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
-                    return value;
-                } else {
-                    if (std.fmt.parseInt(i64, literal, 10)) |int| {
-                        value.* = .{ .integer = int };
-                        return value;
-                    } else |_| {
-                        value.* = .{ .bigInteger = try readBigInteger(allocator, literal) };
-                        return value;
-                    }
-                }
-            },
-            .float => {
-                const literal = token.literal.?;
-                const value = try allocator.create(Edn);
-                errdefer allocator.destroy(value);
-                if (literal[literal.len - 1] == 'M') {
-                    var a = try readBigInteger(allocator, literal[0 .. literal.len - 1]);
-                    defer a.deinit();
-                    var f = try big.Rational.init(allocator);
-                    try f.copyInt(a);
-                    value.* = .{ .bigFloat = f };
-                    return value;
-                } else {
-                    if (std.fmt.parseFloat(f64, literal)) |float| {
-                        value.* = .{ .float = float };
-                        return value;
-                    } else |err| {
-                        return err;
-                        // TODO: decide the limits of exact precision floating numbers
-                        // var whole_end: usize = 0;
-                        // if (literal[0] == '+' or literal[0] == '-')
-                        //     whole_end += 1;
-                        // while (whole_end < literal.len) : (whole_end += 1) {
-                        //     if (literal[whole_end] == '.' or literal[whole_end] == 'e' or literal[whole_end] == 'E')
-                        //         break;
-                        // }
-                        // var frac_end = whole_end;
-                        // while (frac_end < literal.len) : (frac_end += 1) {
-                        //     if (literal[frac_end] == 'e' or literal[frac_end] == 'E')
-                        //         break;
-                        // }
-                        // // whole_end <= frac_end <= literal.len is true
-                        // const whole_part = try readBigInteger(allocator, literal[0..whole_end]);
-                        // const frac_part = if (whole_end + 1 < frac_end)
-                        //     try readBigInteger(allocator, literal[whole_end + 1 .. frac_end])
-                        // else blk: {
-                        //     var frac = try big.int.Managed.init(allocator);
-                        //     frac.set(0);
-                        //     break :blk frac;
-                        // };
-                        // const exp_part = if (frac_end == literal.len) blk: {
-                        //     var exp = try big.int.Managed.init(allocator);
-                        //     exp.set(0);
-                        //     break :blk exp;
-                        // } else try readBigInteger(allocator, literal[frac_end + 1 ..]);
-                        // {
-                        //     whole_part.dump();
-                        //     frac_part.dump();
-                        //     exp_part.dump();
-                        // }
-                        // const frac_size = frac_end - whole_end - 1;
-                        
-                    }
-                    // const value = try allocator.create(Edn);
-                }
-            },
-            .@"(" => {
-                const value = try allocator.create(Edn);
-                value.* = .{ .list = std.ArrayList(*const Edn).init(allocator) };
-                errdefer allocator.destroy(value);
-                errdefer value.list.deinit();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // const g_allocator = gpa.allocator();
+    // defer {
+    //     _ = gpa.detectLeaks();
 
-                while (iter.peek()) |token2| {
-                    switch (token2.tag) {
-                        .@"}", .@"]" => return error.ParenMismatch,
-                        .@")" => {
-                            _ = iter.next();
-                            log.info("value len is {}", .{value.list.items.len});
-                            return value;
-                        },
-                        else => {
-                            const item = try readEdn(allocator, iter);
-                            try value.list.append(item);
-                        },
-                    }
-                }
-                return error.@"collection delimiter";
-            },
-            .@"[" => {
-                const value = try allocator.create(Edn);
-                value.* = .{ .vector = std.ArrayList(*const Edn).init(allocator) };
-                errdefer allocator.destroy(value);
-                errdefer value.vector.deinit();
+    //     const deinit_status = gpa.deinit();
+    //     if (deinit_status == .leak) expect(false) catch @panic("leaked");
+    // }
 
-                while (iter.peek()) |token2| {
-                    switch (token2.tag) {
-                        .@"}", .@")" => return error.ParenMismatch,
-                        .@"]" => {
-                            _ = iter.next();
-                            return value;
-                        },
-                        else => {
-                            const item = try readEdn(allocator, iter);
-                            try value.vector.append(item);
-                        },
-                    }
-                }
-                return error.@"collection delimiter";
-            },
-            .@"#{" => {
-                const value = try allocator.create(Edn);
-                value.* = .{ .hashset = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
-                errdefer allocator.destroy(value);
-                errdefer value.list.deinit();
-
-                while (iter.peek()) |token2| {
-                    switch (token2.tag) {
-                        .@")", .@"]" => return error.ParenMismatch,
-                        .@"}" => {
-                            _ = iter.next();
-                            log.info("value len is {}", .{value.hashset.count()});
-                            return value;
-                        },
-                        else => {
-                            const item = try readEdn(allocator, iter);
-                            try value.hashset.put(item, item);
-                        },
-                    }
-                }
-                return error.@"collection delimiter";
-            },
-            .@"{" => {
-                const value = try allocator.create(Edn);
-                value.* = .{ .hashmap = std.AutoArrayHashMap(*const Edn, *const Edn).init(allocator) };
-                errdefer allocator.destroy(value);
-                errdefer value.hashmap.deinit();
-
-                while (iter.peek()) |token2| {
-                    switch (token2.tag) {
-                        .@")", .@"]" => return error.ParenMismatch,
-                        .@"}" => {
-                            _ = iter.next();
-                            log.info("hashmap len is {}", .{value.hashmap.count()});
-                            return value;
-                        },
-                        else => {
-                            const key = try readEdn(allocator, iter);
-                            // const val = try readEdn(allocator, iter);
-                            if (iter.peek()) |token3| {
-                                switch (token3.tag) {
-                                    .@")", .@"]" => return error.ParenMismatch2,
-                                    .@"}" => return error.OddNumberHashMap,
-                                    else => {
-                                        const val = try readEdn(allocator, iter);
-                                        try value.hashmap.put(key, val);
-                                    },
-                                }
-                            } else return error.OddNumberHashMap2;
-                        },
-                    }
-                }
-                return error.@"collection delimiter";
-            },
-            .@"#_" => {
-                const t = try readEdn(allocator, iter);
-                allocator.destroy(t);
-                return readEdn(allocator, iter);
-            },
-            .tag => {
-                // var value = allocator.create(Edn);
-                var value = try allocator.create(Edn);
-                errdefer allocator.destroy(value);
-
-                const tag_value = try readEdn(allocator, iter);
-
-                var tag_element = try allocator.create(Tag);
-                errdefer allocator.destroy(tag_element);
-                tag_element.tag = token.literal.?;
-                tag_element.element = .{ .edn = tag_value };
-                value.* = .{ .tag = tag_element.* };
-
-                return value;
-            },
-            else => {
-                return error.@"edn still didn't implement type";
-            },
-        }
-    } else {
-        log.warn("got null", .{});
-    }
-
-    return error.@"edn is an extensible data format";
+    // std.debug.print("honey {*}\n",.{&g_allocator});
+    // var x = try f1(g_allocator);
+    // std.debug.print("value {}\n",.{x});
+    // g_allocator.destroy(&x);
+    // g_allocator2.destroy(x);
+    // var a = try readBigInteger(g_allocator, "1234");
+    // std.debug.print("{*}\n",.{&a});
+    // a.deinit();
 }
 pub fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !big.int.Managed {
     var v = try big.int.Managed.init(allocator);
@@ -344,17 +146,295 @@ pub fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !big.int.Man
 const EdnReader = struct {
     buffer: []const u8,
     iter: lexer.Iterator,
-    arena: std.heap.ArenaAllocator,
-    data_reader: std.StringHashMap(*const fn (allocator: mem.Allocator, edn: *Edn) usize) = undefined,
+    allocator: mem.Allocator,
+    data_readers: ?std.StringHashMap(*const fn (allocator: mem.Allocator, edn: Edn) usize) = null,
 
-    /// allocator is used to make arena allocator.
     pub fn init(allocator: mem.Allocator, buffer: []const u8) EdnReader {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        var iter = lexer.Iterator.init(arena.allocator(), buffer);
-        return .{ .buffer = buffer, .iter = iter, .arena = arena };
+        var iter = lexer.Iterator.init(allocator, buffer);
+        return .{
+            .buffer = buffer,
+            .iter = iter,
+            .allocator = allocator,
+        };
     }
-    pub fn deinit(self: *EdnReader) !void {
-        self.arena.deinit();
+    pub fn deinit(self: *EdnReader) void {
+        self.iter.deinit();
+        if (self.data_readers) |*readers| {
+            readers.deinit();
+        }
+    }
+    // pub fn readEdn(self: *EdnReader,allocator: mem.Allocator, iter: *lexer.Iterator) !*const Edn {
+    pub fn readEdn(self: *EdnReader) !*Edn {
+        // var iter = lexer.Iterator.init(allocator, str);
+        var allocator = self.allocator;
+        var iter = &self.iter;
+        if (iter.next()) |token| {
+            log.info("token is {}", .{token});
+            switch (token.tag) {
+                // .nil => return Edn{ .nil = Edn.nil },
+                .symbol => {
+                    if (mem.eql(u8, "true", token.literal.?)) {
+                        allocator.free(token.literal.?);
+                        return &Edn.true;
+                    } else if (mem.eql(u8, "false", token.literal.?)) {
+                        allocator.free(token.literal.?);
+                        return &Edn.false;
+                    } else if (mem.eql(u8, "nil", token.literal.?)) {
+                        allocator.free(token.literal.?);
+                        return &Edn.nil;
+                    } else {
+                        const value = try allocator.create(Edn);
+                        value.* = .{ .symbol = token.literal.? };
+                        return value;
+                    }
+                },
+                .keyword => {
+                    const value = try allocator.create(Edn);
+                    // const keyword = try allocator.create(Keyword);
+                    // keyword.name = token.literal.?;
+                    // value.* = .{ .keyword = .{ .name = token.literal.? } };
+                    value.* = .{ .keyword = token.literal.? };
+                    return value;
+                },
+                .string => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .string = token.literal.? };
+                    return value;
+                },
+                .character => {
+                    // TODO: analyze memory allocations
+                    const c = lexer.Iterator.firstCodePoint(token.literal.?);
+                    allocator.free(token.literal.?);
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .character = c };
+                    return value;
+                },
+                .integer => {
+                    const literal = token.literal.?;
+                    defer token.deinit(iter.allocator);
+                    const value = try allocator.create(Edn);
+                    errdefer allocator.destroy(value);
+
+                    if (literal[literal.len - 1] == 'N') {
+                        value.* = .{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
+                        return value;
+                    } else {
+                        if (std.fmt.parseInt(i64, literal, 10)) |int| {
+                            value.* = .{ .integer = int };
+                            return value;
+                        } else |_| {
+                            value.* = .{ .bigInteger = try readBigInteger(allocator, literal) };
+                            return value;
+                        }
+                    }
+                },
+                .float => {
+                    const literal = token.literal.?;
+                    defer token.deinit(iter.allocator);
+                    const value = try allocator.create(Edn);
+                    errdefer allocator.destroy(value);
+
+                    if (literal[literal.len - 1] == 'M') {
+                        var a = try readBigInteger(allocator, literal[0 .. literal.len - 1]);
+                        defer a.deinit();
+                        var f = try big.Rational.init(allocator);
+                        errdefer f.deinit();
+
+                        try f.copyInt(a);
+                        value.* = .{ .bigFloat = f };
+                        return value;
+                    } else {
+                        if (std.fmt.parseFloat(f64, literal)) |float| {
+                            value.* = .{ .float = float };
+                            return value;
+                        } else |err| {
+                            return err;
+                            // TODO: decide the limits of exact precision floating numbers
+                            // var whole_end: usize = 0;
+                            // if (literal[0] == '+' or literal[0] == '-')
+                            //     whole_end += 1;
+                            // while (whole_end < literal.len) : (whole_end += 1) {
+                            //     if (literal[whole_end] == '.' or literal[whole_end] == 'e' or literal[whole_end] == 'E')
+                            //         break;
+                            // }
+                            // var frac_end = whole_end;
+                            // while (frac_end < literal.len) : (frac_end += 1) {
+                            //     if (literal[frac_end] == 'e' or literal[frac_end] == 'E')
+                            //         break;
+                            // }
+                            // // whole_end <= frac_end <= literal.len is true
+                            // const whole_part = try readBigInteger(allocator, literal[0..whole_end]);
+                            // const frac_part = if (whole_end + 1 < frac_end)
+                            //     try readBigInteger(allocator, literal[whole_end + 1 .. frac_end])
+                            // else blk: {
+                            //     var frac = try big.int.Managed.init(allocator);
+                            //     frac.set(0);
+                            //     break :blk frac;
+                            // };
+                            // const exp_part = if (frac_end == literal.len) blk: {
+                            //     var exp = try big.int.Managed.init(allocator);
+                            //     exp.set(0);
+                            //     break :blk exp;
+                            // } else try readBigInteger(allocator, literal[frac_end + 1 ..]);
+                            // {
+                            //     whole_part.dump();
+                            //     frac_part.dump();
+                            //     exp_part.dump();
+                            // }
+                            // const frac_size = frac_end - whole_end - 1;
+
+                        }
+                        // const value = try allocator.create(Edn);
+                    }
+                },
+                .@"(" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .list = Edn.List.init(allocator) };
+                    errdefer value.deinit(allocator);
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@"}", .@"]" => return error.ParenMismatch,
+                            .@")" => {
+                                _ = iter.next();
+                                log.info("value len is {}", .{value.list.items.len});
+                                return value;
+                            },
+                            else => {
+                                // const item = try EdnReader.readEdn(allocator, iter);
+                                const item = try self.readEdn();
+                                errdefer item.deinit(allocator);
+
+                                try value.list.append(item);
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"[" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .vector = Edn.Vector.init(allocator) };
+                    errdefer value.deinit(allocator);
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@"}", .@")" => return error.ParenMismatch,
+                            .@"]" => {
+                                _ = iter.next();
+                                return value;
+                            },
+                            else => {
+                                // const item = try EdnReader.readEdn(allocator, iter);
+                                const item = try self.readEdn();
+                                errdefer item.deinit(allocator);
+                                // allocator.destroy(item);
+                                try value.vector.append(item);
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"#{" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .hashset = Edn.Hashset.init(allocator) };
+                    errdefer value.deinit(allocator);
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@")", .@"]" => return error.ParenMismatch,
+                            .@"}" => {
+                                _ = iter.next();
+                                log.info("value len is {}", .{value.hashset.count()});
+                                return value;
+                            },
+                            else => {
+                                // const item = try EdnReader.readEdn(allocator, iter);
+                                const item = try self.readEdn();
+                                errdefer item.deinit(allocator);
+
+                                try value.hashset.put(item, item);
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"{" => {
+                    const value = try allocator.create(Edn);
+                    value.* = .{ .hashmap = Edn.Hashmap.init(allocator) };
+                    errdefer value.deinit(allocator);
+
+                    while (iter.peek()) |token2| {
+                        switch (token2.tag) {
+                            .@")", .@"]" => return error.ParenMismatch,
+                            .@"}" => {
+                                _ = iter.next();
+                                log.info("hashmap len is {}", .{value.hashmap.count()});
+                                return value;
+                            },
+                            else => {
+                                // const key = try EdnReader.readEdn(allocator, iter);
+                                const key = try self.readEdn();
+                                errdefer key.deinit(allocator);
+
+                                // const val = try readEdn(allocator, iter);
+                                if (iter.peek()) |token3| {
+                                    switch (token3.tag) {
+                                        .@")", .@"]" => return error.ParenMismatch2,
+                                        .@"}" => return error.OddNumberHashMap,
+                                        else => {
+                                            // const val = try EdnReader.readEdn(allocator, iter);
+                                            const val = try self.readEdn();
+                                            errdefer val.deinit(allocator);
+
+                                            try value.hashmap.put(key, val);
+                                        },
+                                    }
+                                } else return error.OddNumberHashMap2;
+                            },
+                        }
+                    }
+                    return error.@"collection delimiter";
+                },
+                .@"#_" => {
+                    // const t = try EdnReader.readEdn(allocator, iter);
+                    const t = try self.readEdn();
+                    t.deinit(allocator);
+                    return self.readEdn();
+                },
+                .tag => {
+                    // var value = allocator.create(Edn);
+                    var value = try allocator.create(Edn);
+                    errdefer allocator.destroy(value);
+
+                    // const tag_value = try EdnReader.readEdn(allocator, iter);
+                    const tag_value = try self.readEdn();
+                    // var tag_element = try allocator.create(Tag);
+                    // errdefer allocator.destroy(tag_element);
+                    // tag_element.tag = token.literal.?;
+                    // tag_element.element = .{ .edn = tag_value };
+                    // value.* = .{ .tag = tag_element.* };
+                    if (self.data_readers) |readers| {
+                        if (readers.get(token.literal.?)) |reader| {
+                            const v = reader(allocator, tag_value.*);
+                            tag_value.deinit(allocator);
+                            const tag_element = Tag{ .tag = token.literal.?, .element = .{ .pointer = v } };
+                            value.* = .{ .tag = tag_element };
+                            return value;
+                        }
+                    }
+                    const tag_element = Tag{ .tag = token.literal.?, .element = .{ .edn = tag_value } };
+                    value.* = .{ .tag = tag_element };
+                    return value;
+                },
+                .@"]", .@")", .@"}" => {
+                    return error.@"no collection defined";
+                },
+            }
+        } else {
+            log.warn("got null", .{});
+        }
+
+        return error.@"edn is an extensible data format";
     }
 };
 // I decided to keep keyword and symbol simple and we can compute each part (prefix,name) on demand.
@@ -378,47 +458,69 @@ const Edn = union(enum) {
     hashset: Hashset,
     tag: Tag,
     pub const Character = u21;
-    pub const List = std.ArrayList(*const Edn);
-    pub const Vector = std.ArrayList(*const Edn);
-    pub const Hashmap = std.AutoArrayHashMap(*const Edn, *const Edn);
-    pub const Hashset = std.AutoArrayHashMap(*const Edn, *const Edn);
+    pub const List = std.ArrayList(*Edn);
+    pub const Vector = std.ArrayList(*Edn);
+    pub const Hashmap = std.AutoArrayHashMap(*Edn, *Edn);
+    pub const Hashset = std.AutoArrayHashMap(*Edn, *Edn);
 
     const Nil = enum { nil };
-    pub const nil = Edn{ .nil = Nil.nil };
-    pub const @"true" = Edn{ .boolean = true };
-    pub const @"false" = Edn{ .boolean = false };
+    pub var nil = Edn{ .nil = Nil.nil };
+    pub var @"true" = Edn{ .boolean = true };
+    pub var @"false" = Edn{ .boolean = false };
 
-    pub fn deinit(self: *Edn, alloc: mem.Allocator) !void {
-        switch (self) {
-            .nil, .boolean => {
+    pub fn deinit(self: *Edn, allocator: mem.Allocator) void {
+        switch (self.*) {
+            .nil, .boolean => return,
+            .integer, .float, .character => {
+                allocator.destroy(self);
                 return;
             },
-            .string, .character, .symbol, .keyword, .integer, .float => {
-                alloc.destroy(self);
+            .string, .symbol, .keyword => |*literal| {
+                allocator.free(literal.*);
+                allocator.destroy(self);
             },
-            .bigInteger => {
-                alloc.destroy(self.bigInteger);
-                alloc.destroy(self);
+            inline .bigInteger, .bigFloat => |*number| {
+                number.deinit();
+                allocator.destroy(self);
             },
-            .bigFloat => {
-                alloc.destroy(self.bigFloat);
-                alloc.destroy(self);
+            inline .list, .vector => |*collection| {
+                for (collection.items) |item| {
+                    item.deinit(allocator);
+                }
+                collection.deinit();
+                allocator.destroy(self);
             },
-            .list => {
-                self.list.deinit();
-                alloc.destroy(self);
+            .hashmap => |*collection| {
+                var iterator = collection.iterator();
+                while (iterator.next()) |entry| {
+                    entry.key_ptr.*.deinit(allocator);
+                    entry.value_ptr.*.deinit(allocator);
+                }
+                collection.deinit();
+                allocator.destroy(self);
             },
-            .vector => {
-                self.vector.deinit();
-                alloc.destroy(self);
+            .hashset => |*collection| {
+                var iterator = collection.iterator();
+                while (iterator.next()) |entry| {
+                    entry.key_ptr.*.deinit(allocator);
+                    // entry.value_ptr.*.deinit(allocator);
+                }
+                collection.deinit();
+                allocator.destroy(self);
             },
-            .hashmap => {
-                self.hashmap.deinit();
-                alloc.destroy(self);
-            },
-            .hashset => {
-                self.hashset.deinit();
-                alloc.destroy(self);
+            .tag => {
+                allocator.free(self.tag.tag);
+                switch (self.tag.element) {
+                    .edn => |element| {
+                        element.deinit(allocator);
+                    },
+                    .pointer => |element| {
+                        // maybe define tags differently to include a deinit function
+                        //element
+                        // allocator.destroy(@ptrFromInt(element));
+                    },
+                }
+                allocator.destroy(self);
             },
         }
     }
@@ -467,7 +569,16 @@ const Edn = union(enum) {
                 } else unreachable;
             },
             .character => {
-                try writer.print("\\{u}", .{value.character});
+                if (value.character == '\n')
+                    try writer.writeAll("\\newline")
+                else if (value.character == '\r')
+                    try writer.writeAll("\\return")
+                else if (value.character == '\t')
+                    try writer.writeAll("\\tab")
+                else if (value.character == ' ')
+                    try writer.writeAll("\\space")
+                else
+                    try writer.print("\\{u}", .{value.character});
             },
             .string => {
                 try writer.print("\"{s}\"", .{value.string});
@@ -504,22 +615,30 @@ const Edn = union(enum) {
                 var iterator = value.hashset.iterator();
                 while (iterator.next()) |entry| {
                     try format(entry.key_ptr.*.*, fmt, options, writer);
-                    try writer.writeAll(" ");
-                    try format(entry.value_ptr.*.*, fmt, options, writer);
+                    // try writer.writeAll(" ");
+                    // try format(entry.value_ptr.*.*, fmt, options, writer);
                     try writer.writeAll(", ");
                 }
                 try writer.writeAll("}");
             },
             .tag => {
-                try writer.print("#{s} ",.{value.tag.tag});
-                try format(value.tag.element.edn.*,fmt,options,writer);
+                try writer.print("#{s} ", .{value.tag.tag});
+                switch (value.tag.element) {
+                    .edn => {
+                        try format(value.tag.element.edn.*, fmt, options, writer);
+                    },
+                    .pointer => {
+                        try writer.print("@{}", .{value.tag.element.pointer});
+                    },
+                }
             },
         }
     }
 };
+const TagEnum = enum { edn, pointer };
 pub const Tag = struct {
     tag: []const u8,
-    element: union { edn: *const Edn, pointer: usize },
+    element: union(TagEnum) { edn: *Edn, pointer: usize },
 };
 
 pub const Symbol = []const u8;
