@@ -98,9 +98,11 @@ fn repl_edn() !void {
             }
             // const allocator = arena.allocator();
             var reader = EdnReader.init(g_allocator, input);
+            reader.data_readers = std.StringHashMap(tagHandler).init(g_allocator);
+            try reader.data_readers.?.put("inst", edn_to_inst);
             defer reader.deinit();
             // if (EdnReader.readEdn(allocator, &iter)) |edn| {
-            while (reader.readEdn()) |edn| {
+            if (reader.readEdn()) |edn| {
                 log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
                 try stdout.print("{}\n", .{edn.*});
 
@@ -112,6 +114,28 @@ fn repl_edn() !void {
         } else break;
     }
     try stdout.print("finished\n", .{});
+}
+fn edn_to_inst(allocator: mem.Allocator, edn: Edn) !*tagElement {
+    switch (edn) {
+        .integer => |i| {
+            var i_p = try allocator.create(@TypeOf(i));
+            i_p.* = i + 10;
+            var ele = try allocator.create(tagElement);
+            ele.pointer = @intFromPtr(i_p);
+            ele.deinit = inst_deinit;
+            return ele;
+        },
+        else => {
+            var ele = try allocator.create(tagElement);
+            ele.pointer = @as(usize, 0x101010);
+            ele.deinit = inst_deinit;
+            return ele;
+        },
+    }
+}
+fn inst_deinit(pointer: usize, allocator: mem.Allocator) void {
+    const i_p: *i64 = @ptrFromInt(pointer);
+    allocator.destroy(i_p);
 }
 // clojure koans
 pub fn main() !void {
@@ -147,7 +171,7 @@ const EdnReader = struct {
     buffer: []const u8,
     iter: lexer.Iterator,
     allocator: mem.Allocator,
-    data_readers: ?std.StringHashMap(*const fn (allocator: mem.Allocator, edn: Edn) usize) = null,
+    data_readers: ?std.StringHashMap(tagHandler) = null,
 
     pub fn init(allocator: mem.Allocator, buffer: []const u8) EdnReader {
         var iter = lexer.Iterator.init(allocator, buffer);
@@ -408,6 +432,7 @@ const EdnReader = struct {
 
                     // const tag_value = try EdnReader.readEdn(allocator, iter);
                     const tag_value = try self.readEdn();
+                    errdefer tag_value.deinit(allocator);
                     // var tag_element = try allocator.create(Tag);
                     // errdefer allocator.destroy(tag_element);
                     // tag_element.tag = token.literal.?;
@@ -415,7 +440,7 @@ const EdnReader = struct {
                     // value.* = .{ .tag = tag_element.* };
                     if (self.data_readers) |readers| {
                         if (readers.get(token.literal.?)) |reader| {
-                            const v = reader(allocator, tag_value.*);
+                            const v = try reader(allocator, tag_value.*);
                             tag_value.deinit(allocator);
                             const tag_element = Tag{ .tag = token.literal.?, .element = .{ .pointer = v } };
                             value.* = .{ .tag = tag_element };
@@ -515,9 +540,20 @@ const Edn = union(enum) {
                         element.deinit(allocator);
                     },
                     .pointer => |element| {
+                        element.deinit(element.pointer, allocator);
+                        allocator.destroy(element);
                         // maybe define tags differently to include a deinit function
                         //element
                         // allocator.destroy(@ptrFromInt(element));
+                        // if (self.data_readers) |readers| {
+                        //     if (readers.get(token.literal.?)) |reader| {
+                        //         const v = reader.handle(allocator, tag_value.*);
+                        //         tag_value.deinit(allocator);
+                        //         const tag_element = Tag{ .tag = token.literal.?, .element = .{ .pointer = v } };
+                        //         value.* = .{ .tag = tag_element };
+                        //         return value;
+                        //     }
+                        // }
                     },
                 }
                 allocator.destroy(self);
@@ -636,9 +672,17 @@ const Edn = union(enum) {
     }
 };
 const TagEnum = enum { edn, pointer };
+pub const tagHandler = *const fn (allocator: mem.Allocator, edn: Edn) mem.Allocator.Error!*tagElement;
+// pub const tagHandler = struct {
+//     handle: *const fn (allocator: mem.Allocator, edn: Edn) *tagElement,
+// };
+pub const tagElement = struct {
+    pointer: usize,
+    deinit: *const fn (pointer: usize, allocator: mem.Allocator) void,
+};
 pub const Tag = struct {
     tag: []const u8,
-    element: union(TagEnum) { edn: *Edn, pointer: usize },
+    element: union(TagEnum) { edn: *Edn, pointer: *tagElement },
 };
 
 pub const Symbol = []const u8;
