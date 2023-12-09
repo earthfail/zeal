@@ -28,7 +28,7 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     std.debug.print("s={any}\n", .{s.ptr});
     const stdio = std.io.getStdOut().writer();
 
-    var edn_iter = try Iterator.init(g_allocator, s);
+    var edn_iter = Iterator.init(g_allocator, s);
     while (edn_iter.next()) |token| {
         defer token.deinit(g_allocator);
         // defer if (token.literal) |c| {
