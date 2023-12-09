@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const files = [_][]const u8{"src/main.zig","src/lexer.zig"};
+    const files = [_][]const u8{"src/main.zig","src/lexer.zig","src/parser.zig"};
     const test_step = b.step("test", "Run unit tests");
     for(files) |f| {
         const unit_tests = b.addTest(.{
