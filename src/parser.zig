@@ -400,7 +400,141 @@ pub const Edn = union(enum) {
             },
         }
     }
+    pub fn serialize(value: Edn, allocator: mem.Allocator) ![]const u8 {
+        var buffer = std.ArrayList(u8).init(allocator);
+        errdefer buffer.deinit();
+        const writer = buffer.writer();
+        switch (value) {
+            .nil => try writer.writeAll("nil"),
+            .boolean => {
+                if (value.boolean) {
+                    try writer.writeAll("true");
+                } else try writer.writeAll("false");
+            },
+            .symbol => {
+                try writer.print("{s}", .{value.symbol});
+            },
+            .keyword => {
+                try writer.print(":{s}", .{value.keyword});
+            },
+            .integer => {
+                try writer.print("{d}", .{value.integer});
+            },
+            .bigInteger => {
+                const big_int = value.bigInteger;
+                const alloc = big_int.allocator;
+                const case: std.fmt.Case = .lower;
+                const string_rep = try big_int.toString(alloc, 10, case);
+                defer alloc.free(string_rep);
+                try writer.print("{s}N", .{string_rep});
+            },
+            .float => {
+                try writer.print("{d}", .{value.float});
+            },
+            .bigFloat => {
+                const big_float = value.bigFloat;
+                const num_alloc = big_float.p.allocator;
+                const den_alloc = big_float.q.allocator;
+                const case: std.fmt.Case = .lower;
+
+                const num_string = try big_float.p.toString(num_alloc, 10, case);
+                defer num_alloc.free(num_string);
+
+                const den_string = try big_float.q.toString(den_alloc, 10, case);
+                defer den_alloc.free(den_string);
+
+                if (mem.eql(u8, "1", den_string)) {
+                    try writer.print("{s}M", .{num_string});
+                } else unreachable;
+            },
+            .character => {
+                if (value.character == '\n')
+                    try writer.writeAll("\\newline")
+                else if (value.character == '\r')
+                    try writer.writeAll("\\return")
+                else if (value.character == '\t')
+                    try writer.writeAll("\\tab")
+                else if (value.character == ' ')
+                    try writer.writeAll("\\space")
+                else
+                    try writer.print("\\{u}", .{value.character});
+            },
+            .string => {
+                try writer.print("\"{s}\"", .{value.string});
+            },
+            .list => {
+                try writer.writeAll("( ");
+                for (value.list.items) |item| {
+                    const item_serialized = try Edn.serialize(item.*, allocator);
+                    defer allocator.free(item_serialized);
+
+                    try writer.writeAll(item_serialized);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll(" )");
+            },
+            .vector => {
+                try writer.writeAll("[");
+                for (value.vector.items) |item| {
+                    const item_serialized = try Edn.serialize(item.*, allocator);
+                    defer allocator.free(item_serialized);
+
+                    try writer.writeAll(item_serialized);
+                    try writer.writeAll(" ");
+                }
+                try writer.writeAll("]");
+            },
+            .hashmap => {
+                try writer.writeAll("{");
+                var iterator = value.hashmap.iterator();
+                while (iterator.next()) |entry| {
+                    // todo: continue migrating
+                    const key_serialized = try Edn.serialize(entry.key_ptr.*.*, allocator);
+                    defer allocator.free(key_serialized);
+                    const value_serialized = try Edn.serialize(entry.value_ptr.*.*, allocator);
+                    defer allocator.free(value_serialized);
+
+                    try writer.writeAll(key_serialized);
+                    try writer.writeAll(" ");
+                    try writer.writeAll(value_serialized);
+                    try writer.writeAll(", ");
+                }
+                try writer.writeAll("}");
+            },
+            .hashset => {
+                try writer.writeAll("#{");
+                var iterator = value.hashset.iterator();
+                while (iterator.next()) |entry| {
+                    const key_serialized = try Edn.serialize(entry.key_ptr.*.*, allocator);
+                    defer allocator.free(key_serialized);
+                    try writer.writeAll(key_serialized);
+                    try writer.writeAll(", ");
+                }
+                try writer.writeAll("}");
+            },
+            .tag => {
+                switch (value.tag.data) {
+                    .edn => |element| {
+                        try writer.print("#{s} ", .{value.tag.tag});
+                        const element_serialized = try Edn.serialize(element.*, allocator);
+                        defer allocator.free(element_serialized);
+                        try writer.writeAll(element_serialized);
+                    },
+                    .element => |element| {
+                        if (element.serialize) |_| {
+                            const tag_serialized = try element.serialize.?(element.pointer, allocator);
+                            defer allocator.free(tag_serialized);
+                            try writer.print("#{s} ", .{value.tag.tag});
+                            try writer.writeAll(tag_serialized);
+                        }
+                    },
+                }
+            },
+        }
+        return buffer.toOwnedSlice();
+    }
     pub fn format(value: Edn, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        log.info("writer type {}", .{@TypeOf(writer)});
         switch (value) {
             .nil => try writer.writeAll("nil"),
             .boolean => {
@@ -501,8 +635,8 @@ pub const Edn = union(enum) {
                     .edn => {
                         try format(value.tag.data.edn.*, fmt, options, writer);
                     },
-                    .element => |ele| {
-                        try writer.print("{}", .{ele.pointer});
+                    .element => |_| {
+                        return error.InvalidArgument;
                         // if (std.meta.hasFn(ele.T, "format")) {
                         //     try format(@as(ele.T, @ptrFromInt(ele.pointer)).*, fmt, options, writer);
                         // } else {
@@ -516,11 +650,12 @@ pub const Edn = union(enum) {
 };
 pub const TagEnum = enum { edn, element };
 pub const TagError = mem.Allocator.Error || error{TypeNotSupported};
+pub const SerializeError = mem.Allocator.Error || error{InvalidData};
 pub const TagHandler = *const fn (allocator: mem.Allocator, edn: Edn) TagError!*TagElement;
 pub const TagElement = struct {
     pointer: usize,
-    // T: type,
     deinit: *const fn (pointer: usize, allocator: mem.Allocator) void,
+    serialize: ?*const fn (pointer: usize, allocator: mem.Allocator) SerializeError![]const u8 = null,
 };
 pub const Tag = struct {
     tag: []const u8,
