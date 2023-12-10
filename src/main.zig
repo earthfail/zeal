@@ -22,6 +22,7 @@ pub const std_options = struct {
 
     // Define logFn to override the std implementation
     // pub const logFn = myLogFn;
+    pub const logFn = log.defaultLog;
 };
 
 fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
@@ -89,15 +90,7 @@ fn repl_edn() !void {
     while (true) {
         try stdout.print("reading input:", .{});
         if (try nextLine(stdin, &buffer)) |input| {
-            // if(input.len == 0) break;
-            // var iter = lexer.Iterator.init(allocator, input) catch |err| blk: {
-            //     try stdout.print("error in tokenizing {}. Salam\n", .{err});
-            //     break :blk try lexer.Iterator.init(allocator, "subhanaAllah");
-            // };
-            // var arena = std.heap.ArenaAllocator.init(g_allocator);
             defer {
-                // std.debug.print("arena deinit\n", .{});
-                // arena.deinit();
                 if (gpa.detectLeaks()) {
                     std.debug.print("gpa detected leaks with input '{s}'\n", .{input});
                 }
@@ -110,7 +103,12 @@ fn repl_edn() !void {
             // if (EdnReader.readEdn(allocator, &iter)) |edn| {
             if (reader.readEdn()) |edn| {
                 log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
-                try stdout.print("{}\n", .{edn.*});
+                // log.info("edn from log {}\n",.{edn.*});
+                // try stdout.print("{}\n", .{edn.*});
+                const serialize = try parser.Edn.serialize(edn.*, g_allocator);
+                defer g_allocator.free(serialize);
+
+                try stdout.print("{s}\n", .{serialize});
 
                 edn.deinit(g_allocator);
             } else |err| {
@@ -137,7 +135,9 @@ pub fn main() !void {
     //     const deinit_status = gpa.deinit();
     //     if (deinit_status == .leak) expect(false) catch @panic("leaked");
     // }
-
+    // var x: i32 = 10;
+    // var p: *const i32 = &x;
+    // std.debug.print("{*} {*}\n", .{ p, @constCast(p) });
     // std.debug.print("honey {*}\n",.{&g_allocator});
     // var x = try f1(g_allocator);
     // std.debug.print("value {}\n",.{x});
@@ -155,6 +155,7 @@ fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
             var ele = try allocator.create(TagElement);
             ele.pointer = @intFromPtr(i_p);
             ele.deinit = inst_deinit;
+            ele.serialize = inst_serialize;
             return ele;
         },
         else => {
@@ -165,4 +166,13 @@ fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
 fn inst_deinit(pointer: usize, allocator: mem.Allocator) void {
     const i_p: *i64 = @ptrFromInt(pointer);
     allocator.destroy(i_p);
+}
+fn inst_serialize(pointer: usize, allocator: mem.Allocator) parser.SerializeError![]const u8 {
+    const i_p: *i64 = @ptrFromInt(pointer);
+    var buffer = std.ArrayList(u8).init(allocator);
+    errdefer buffer.deinit();
+
+    const writer = buffer.writer();
+    writer.print("{d}",.{i_p.*}) catch return parser.SerializeError.InvalidData;
+    return buffer.toOwnedSlice();
 }
