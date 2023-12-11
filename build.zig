@@ -15,8 +15,32 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("zeal", .{ .source_file = .{ .path = "src/edn.zig"}});
 
+    // ziglyph
+    const ziglyph = b.dependency("ziglyph", .{
+        .optimize = optimize,
+        .target = target,
+    });
+    
+    const zeal = b.addModule("zeal-mod", .{
+        .source_file = .{ .path = "src/edn.zig"},
+        .dependencies = &.{
+            .{
+                .name = "ziglyph",
+                .module = ziglyph.module("ziglyph"),
+            },
+        },
+    });
+
+    const lib = b.addStaticLibrary(.{
+        .name = "zeal-lib",
+        .root_source_file = .{ .path = "src/edn.zig"},
+        .target = target,
+        .optimize = optimize,
+    });
+    lib.addModule("ziglyph",ziglyph.module("ziglyph"));
+    b.installArtifact(lib);
+    
     const exe = b.addExecutable(.{
         .name = "edn-parser",
         // In this case the main source file is merely a path, however, in more
@@ -25,15 +49,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
-    // ziglyph
-    const ziglyph = b.dependency("ziglyph", .{
-        .optimize = optimize,
-        .target = target,
-    });
-    // for exe, lib, tests, etc.
     exe.addModule("ziglyph", ziglyph.module("ziglyph"));
 
+    exe.addModule("zeal",zeal);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
