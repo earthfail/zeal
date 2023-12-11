@@ -22,9 +22,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
     
-    const zeal = b.addModule("zeal-mod", .{
+    _ = b.addModule("zeal", .{
         .source_file = .{ .path = "src/edn.zig"},
         .dependencies = &.{
+            // zig uses this information to add ziglyph when adding zeal
             .{
                 .name = "ziglyph",
                 .module = ziglyph.module("ziglyph"),
@@ -32,7 +33,9 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    //// useful if I want to create a static library
     // const lib = b.addStaticLibrary(.{
+    //     // library file name is "lib[name].a"
     //     .name = "zeal-lib",
     //     .root_source_file = .{ .path = "src/edn.zig"},
     //     .target = target,
@@ -42,6 +45,7 @@ pub fn build(b: *std.Build) void {
     // b.installArtifact(lib);
     
     const exe = b.addExecutable(.{
+        // executable file name is "[name]"
         .name = "edn-parser",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.

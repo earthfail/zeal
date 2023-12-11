@@ -11,34 +11,57 @@ This is alpha software so expect bugs.
 .dependencies = .{
     ...
 .zeal = .{
-            .url = "https://github.com/earthfail/zeal/archive/v0.0.1.tar.gz",
+    .url = "https://github.com/earthfail/zeal/archive/v0.0.2.tar.gz",
+    .hash = "1220302efc8baa22fa6d6d1c0269bef215f5cf1b614cbe2db9b4bcf9dcc6db514421",
     }
     ...
 }
 ```
-then run `zig build` to get a hash mismatch. Add this hash to `.hash`
-field next to `.url` field above.
 2. add `zeal` to `build.zig`:
 
 ``` zig
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    ....
+    // define exe for your use case
+    const exe = b.addExecutable(.{
+        .name = "project-name",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    // add zeal as dependency
     const zeal = b.dependency("zeal", .{
         .optimize = optimize,
         .target = target,
     });
-    // for exe, lib, tests, etc.
     exe.addModule("zeal", zeal.module("zeal"));
-    ....
+    b.installArtifact(exe);
+    // rest of build.zig
+
 ```
 
 3. import in your code:
 ``` zig
-
-const std = @import("std");
 const zeal = @import("zeal");
+```
+
+## Example
+
+``` zig
+const std = @import("std");
+const mem = std.mem;
+const log = std.log;
+const expect = std.testing.expect;
+const zeal = @import("zeal");
+const parser = zeal.parser;
+const EdnReader = zeal.EdnReader;
+const Edn = zeal.Edn;
+const TagElement = zeal.TagElement;
+const TagError = zeal.TagError;
+
+/// simple function to read a line from user
+/// taken from [ziglearn.org](https://ziglearn.org/chapter-2/#readers-and-writers) by [Sobeston](https://github.com/Sobeston)
 fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
     var line = (try reader.readUntilDelimiterOrEof(
         buffer,
@@ -51,6 +74,7 @@ fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
         return line;
     }
 }
+// read edn from stdin
 fn repl_edn() !void {
     var gpa = std.heap.GeneralPurposeAllocator(
     //.{ .verbose_log = true, .retain_metadata = true }
@@ -67,6 +91,7 @@ fn repl_edn() !void {
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
+    // buffer to hold user input
     var buffer: [2000]u8 = undefined;
     try stdout.writeAll("edn is an extensible data notation\n");
     while (true) {
@@ -77,22 +102,24 @@ fn repl_edn() !void {
                     std.debug.print("gpa detected leaks with input '{s}'\n", .{input});
                 }
             }
-            // const allocator = arena.allocator();
+
+            // define ednreader
             var reader = EdnReader.init(g_allocator, input);
+            // initialize readers to tagged elements
             reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
+            // define reader for #inst elements.
             try reader.data_readers.?.put("inst", edn_to_inst);
             defer reader.deinit();
-            // if (EdnReader.readEdn(allocator, &iter)) |edn| {
+
             if (reader.readEdn()) |edn| {
-                log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
-                // log.info("edn from log {}\n",.{edn.*});
                 // try stdout.print("{}\n", .{edn.*});
+                // convert edn to []const u8
+                defer edn.deinit(g_allocator);
                 const serialize = try parser.Edn.serialize(edn.*, g_allocator);
                 defer g_allocator.free(serialize);
 
                 try stdout.print("{s}\n", .{serialize});
 
-                edn.deinit(g_allocator);
             } else |err| {
                 try stdout.print("got error parsing input {}. Salam\n", .{err});
                 // break;
@@ -100,6 +127,40 @@ fn repl_edn() !void {
         } else break;
     }
     try stdout.print("finished\n", .{});
+}
+/// given a integer in Edn form, returns a tagged element with that integer plus ten
+fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
+    switch (edn) {
+        .integer => |i| {
+            var i_p = try allocator.create(@TypeOf(i));
+            i_p.* = i + 10;
+            var ele = try allocator.create(TagElement);
+            ele.pointer = @intFromPtr(i_p);
+            ele.deinit = inst_deinit;
+            ele.serialize = inst_serialize;
+            return ele;
+        },
+        else => {
+            return TagError.TypeNotSupported;
+        },
+    }
+}
+fn inst_deinit(pointer: usize, allocator: mem.Allocator) void {
+    const i_p: *i64 = @ptrFromInt(pointer);
+    allocator.destroy(i_p);
+}
+// specifiy how to convert data back to string
+fn inst_serialize(pointer: usize, allocator: mem.Allocator) parser.SerializeError![]const u8 {
+    const i_p: *i64 = @ptrFromInt(pointer);
+    var buffer = std.ArrayList(u8).init(allocator);
+    errdefer buffer.deinit();
+
+    const writer = buffer.writer();
+    writer.print("{d}", .{i_p.*}) catch return parser.SerializeError.InvalidData;
+    return buffer.toOwnedSlice();
+}
+pub fn main() !void {
+    try repl_edn();
 }
 
 ```
