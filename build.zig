@@ -1,3 +1,4 @@
+// https://ziglang.org/learn/build-system/
 const std = @import("std");
 
 // Although this function looks imperative, note that its job is to
@@ -9,11 +10,12 @@ pub fn build(b: *std.Build) void {
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    _ = b.addModule("zeal", .{ .source_file = .{ .path = "src/edn.zig"}});
 
     const exe = b.addExecutable(.{
         .name = "edn-parser",
@@ -31,7 +33,7 @@ pub fn build(b: *std.Build) void {
     });
     // for exe, lib, tests, etc.
     exe.addModule("ziglyph", ziglyph.module("ziglyph"));
-    
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
