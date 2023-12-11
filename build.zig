@@ -32,14 +32,14 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const lib = b.addStaticLibrary(.{
-        .name = "zeal-lib",
-        .root_source_file = .{ .path = "src/edn.zig"},
-        .target = target,
-        .optimize = optimize,
-    });
-    lib.addModule("ziglyph",ziglyph.module("ziglyph"));
-    b.installArtifact(lib);
+    // const lib = b.addStaticLibrary(.{
+    //     .name = "zeal-lib",
+    //     .root_source_file = .{ .path = "src/edn.zig"},
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // lib.addModule("ziglyph",ziglyph.module("ziglyph"));
+    // b.installArtifact(lib);
     
     const exe = b.addExecutable(.{
         .name = "edn-parser",
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.addModule("ziglyph", ziglyph.module("ziglyph"));
 
-    exe.addModule("zeal",zeal);
+    // exe.addModule("zeal",zeal);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
