@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log;
+// const log = std.log;
 const mem = std.mem;
 const big = std.math.big;
 const expect = std.testing.expect;
@@ -34,7 +34,6 @@ pub const EdnReader = struct {
         var allocator = self.iter.allocator;
         var iter = &self.iter;
         if (iter.next()) |token| {
-            log.info("token is {}", .{token});
             switch (token.tag) {
                 .symbol => {
                     if (mem.eql(u8, "true", token.literal.?)) {
@@ -157,7 +156,6 @@ pub const EdnReader = struct {
                             .@"}", .@"]" => return error.ParenMismatch,
                             .@")" => {
                                 _ = iter.next();
-                                log.info("value len is {}", .{value.list.items.len});
                                 return value;
                             },
                             else => {
@@ -202,7 +200,6 @@ pub const EdnReader = struct {
                             .@")", .@"]" => return error.ParenMismatch,
                             .@"}" => {
                                 _ = iter.next();
-                                log.info("value len is {}", .{value.hashset.count()});
                                 return value;
                             },
                             else => {
@@ -225,7 +222,6 @@ pub const EdnReader = struct {
                             .@")", .@"]" => return error.ParenMismatch,
                             .@"}" => {
                                 _ = iter.next();
-                                log.info("hashmap len is {}", .{value.hashmap.count()});
                                 return value;
                             },
                             else => {
@@ -296,7 +292,7 @@ pub const EdnReader = struct {
                 },
             }
         } else {
-            log.warn("got null", .{});
+            // log.warn("got null", .{});
         }
 
         return error.@"edn is an extensible data format";
@@ -534,7 +530,7 @@ pub const Edn = union(enum) {
         return buffer.toOwnedSlice();
     }
     pub fn format(value: Edn, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        log.info("writer type {}", .{@TypeOf(writer)});
+        // log.info("writer type {}", .{@TypeOf(writer)});
         switch (value) {
             .nil => try writer.writeAll("nil"),
             .boolean => {

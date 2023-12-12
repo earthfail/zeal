@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const mem = std.mem;
-const log = std.log;
+// const log = std.log;
 const unicode = std.unicode;
 const ascii = std.ascii;
 const expect = std.testing.expect;
@@ -10,14 +10,14 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
-pub const std_options = struct {
-    // Set the log level to info
-    pub const log_level = .warn;
+// pub const std_options = struct {
+//     // Set the log level to info
+//     pub const log_level = .warn;
 
-    // Define logFn to override the std implementation
-    // pub const logFn = myLogFn;
-};
-const lexer_log = std.log.scoped(.lexer);
+//     // Define logFn to override the std implementation
+//     // pub const logFn = myLogFn;
+// };
+// const lexer_log = std.log.scoped(.lexer);
 
 const ziglyph = @import("ziglyph");
 const Grapheme = ziglyph.Grapheme;
@@ -68,9 +68,6 @@ pub const Iterator = struct {
         return self.window;
     }
     pub fn next2(self: *Iterator) !?Token {
-        lexer_log.debug("                first char '{s}' {0any}", .{self.iter.peekSlice() orelse "START"});
-        defer lexer_log.debug("                last char '{s}' {0any}", .{self.iter.peekSlice() orelse "EOF"});
-
         self.ignoreSeparator();
         const c = self.iter.peekSlice();
         if (c == null) {
@@ -235,7 +232,6 @@ pub const Iterator = struct {
         }
         // read int
         try self.readDigits(&output);
-        lexer_log.debug("first read {s}", .{output.items});
         // I will ignore exact precision for floating point number and arbitrary precision for integers
         if (self.iter.peekSlice()) |differentiator| {
             const c = firstCodePoint(differentiator);
