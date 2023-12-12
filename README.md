@@ -11,8 +11,8 @@ This is alpha software so expect bugs.
 .dependencies = .{
     ...
 .zeal = .{
-    .url = "https://github.com/earthfail/zeal/archive/v0.0.2.tar.gz",
-    .hash = "1220302efc8baa22fa6d6d1c0269bef215f5cf1b614cbe2db9b4bcf9dcc6db514421",
+    .url = "https://github.com/earthfail/zeal/archive/v0.0.3.tar.gz",
+    .hash = "1220335d9cb009618d8c1a7c1e099e64d6144b5d3021aa19fa90063879bef68c18ca",
     }
     ...
 }
