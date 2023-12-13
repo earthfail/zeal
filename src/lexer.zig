@@ -153,6 +153,14 @@ pub const Iterator = struct {
                 const keyword = self.readSymbol() catch return IterError.KeywordErr;
                 return Token{ .tag = Tag.keyword, .literal = keyword };
             },
+            ';' => {
+                _ = self.iter.nextSlice();
+                while(self.iter.nextSlice()) |c2| {
+                    if(mem.eql(u8,c2,"\n"))
+                        break;
+                }
+                return self.next2();
+            },
             '\"' => {
                 _ = self.iter.nextSlice();
                 const string = try self.readString();
