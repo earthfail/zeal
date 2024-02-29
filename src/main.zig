@@ -102,8 +102,8 @@ pub fn main() !void {
     const args = try process.argsAlloc(allocator);
     defer process.argsFree(allocator, args);
 
-    // const file_name = if(args.len>1) args[1] else "resources/a.edn";
-    const file_name = "resources/64KB.edn";
+    const file_name = if(args.len>1) args[1] else "resources/a.edn";
+    // const file_name = "resources/64KB.edn";
     const file = try fs.cwd().openFile(file_name, .{});
     defer file.close();
 
