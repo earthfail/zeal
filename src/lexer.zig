@@ -366,8 +366,10 @@ pub const Iterator = struct {
         errdefer output.deinit();
 
         if (self.iter.nextSlice()) |first| {
-            assert(!isSeparator(first)); // guaranteed by the next2 function
-
+            // assert(!isSeparator(first)); // guaranteed by the next2 function
+            if(!isSeparator(first)) {
+                return IterError.SymbolErr;
+            }
             // const firstu21 = try unicode.utf8Decode(first);
             const firstu21 = firstCodePoint(first);
             if (ziglyph.isNumber(firstu21))
