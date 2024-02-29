@@ -1,5 +1,6 @@
 # Zeal
 [edn](https://github.com/edn-format/edn) parser and serializer in zig
+with faster parsing than standard `clojure.edn/read`[^2]
 
 # Status
 This is alpha software so expect bugs.
@@ -162,5 +163,8 @@ fn inst_serialize(pointer: usize, allocator: mem.Allocator) parser.SerializeErro
 pub fn main() !void {
     try repl_edn();
 }
-
 ```
+
+[^2]: tested on
+    [json64KB](https://microsoftedge.github.io/Demos/json-dummy-data/64KB.json)
+    converted to edn with `(spit "64KB.edn" data)` and `zig build -Doptimize=ReleaseFast`
