@@ -1,6 +1,8 @@
 // https://discord.com/channels/605571803288698900/1173940455872933978/1173941982448603228
 
 const std = @import("std");
+const process = std.process;
+const fs = std.fs;
 const log = std.log;
 const mem = std.mem;
 const big = std.math.big;
@@ -8,7 +10,7 @@ const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-const lexer = @import("lexer.zig");
+// const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const EdnReader = parser.EdnReader;
 const Edn = parser.Edn;
@@ -37,38 +39,7 @@ fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
         return line;
     }
 }
-fn repl_token() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const g_allocator = gpa.allocator();
-    defer {
-        _ = gpa.detectLeaks();
 
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) expect(false) catch @panic("leaked");
-    }
-    // var arena = std.heap.ArenaAllocator.init(g_allocator);
-    // defer arena.deinit();
-    // const allocator = arena.allocator();
-
-    const stdout = std.io.getStdOut().writer();
-    const stdin = std.io.getStdIn().reader();
-    var buffer: [2000]u8 = undefined;
-    try stdout.writeAll("tokenizing is the first part of parsing\n");
-    while (true) {
-        try stdout.print("reading input:", .{});
-        if (try nextLine(stdin, &buffer)) |input| {
-            if (input.len == 0) break;
-            try lexer.lexString(g_allocator, input);
-            // var reader = lexer.IterReader.init(g_allocator, input);
-            // defer reader.deinit();
-            // try reader.lexing();
-            if (gpa.detectLeaks()) {
-                log.err("token iterator leaked input address {*} and '{s}'", .{ input, input });
-            }
-        } else break;
-    }
-    try stdout.print("finished\n", .{});
-}
 fn repl_edn() !void {
     var gpa = std.heap.GeneralPurposeAllocator(
     //.{ .verbose_log = true, .retain_metadata = true }
@@ -122,10 +93,72 @@ fn repl_edn() !void {
 
 // clojure koans
 pub fn main() !void {
-    std.debug.print("{}\n", .{@sizeOf(mem.Allocator)});
-    std.debug.print("{} {} {} {} {}\n", .{ @sizeOf(EdnReader), @sizeOf(Edn), @sizeOf(big.Rational), @sizeOf(lexer.Iterator), @sizeOf(lexer.Token) });
+    var t = try std.time.Timer.start();
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const args = try process.argsAlloc(allocator);
+    defer process.argsFree(allocator, args);
+
+    // const file_name = if(args.len>1) args[1] else "resources/a.edn";
+    const file_name = "resources/64KB.edn";
+    const file = try fs.cwd().openFile(file_name, .{});
+    defer file.close();
+
+    // var buf_reader = std.io.bufferedReader(file.reader());
+    // const reader = buf_reader.reader();
+    const reader = file.reader();
+
+    var list = std.ArrayList(u8).init(allocator);
+    defer list.deinit();
+
+    try reader.readAllArrayList(&list, 1000 * 1000 * 1000);
+
+    const input = try list.toOwnedSlice();
+    defer allocator.free(input);
+
+    // std.debug.print("input is '{s}'\n", .{input});
+
+    const stdout = std.io.getStdOut().writer();
+    var edn_reader = EdnReader.init(allocator, input);
+    // reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
+    // try reader.data_readers.?.put("inst", edn_to_inst);
+    defer edn_reader.deinit();
+    // if (EdnReader.readEdn(allocator, &iter)) |edn| {
+    if (edn_reader.readEdn()) |edn| {
+        // log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
+        // log.info("edn from log {}\n",.{edn.*});
+        // try stdout.print("{}\n", .{edn.*});
+        const serialize = try parser.Edn.serialize(edn.*, allocator);
+        defer allocator.free(serialize);
+
+        switch(edn.*) {
+            .list, .vector => |v| {
+                try stdout.print("length is {}\n",.{v.items.len});
+                
+            },
+            else => {
+                try stdout.print("output is not a vector\n",.{});
+            }
+        }
+        // try stdout.print("{s}\n", .{serialize});
+
+        edn.deinit(allocator);
+    } else |_| {}
+
+    std.debug.print("{}\n",.{@as(f64,@floatFromInt(t.read()))/1000_000});
+    
+    // else |err| {
+    //     // try stdout.print("got error parsing input {}. Salam\n", .{err});
+    //     // break;
+    // }
+
+    // std.debug.print("{}\n", .{@sizeOf(mem.Allocator)});
+    // std.debug.print("{} {} {} {} {}\n", .{ @sizeOf(EdnReader), @sizeOf(Edn), @sizeOf(big.Rational), @sizeOf(lexer.Iterator), @sizeOf(lexer.Token) });
     // try repl_token();
-    try repl_edn();
+    // try repl_edn();
     // try readEdn("baby");
     // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     // const g_allocator = gpa.allocator();
@@ -173,6 +206,6 @@ fn inst_serialize(pointer: usize, allocator: mem.Allocator) parser.SerializeErro
     errdefer buffer.deinit();
 
     const writer = buffer.writer();
-    writer.print("{d}",.{i_p.*}) catch return parser.SerializeError.InvalidData;
+    writer.print("{d}", .{i_p.*}) catch return parser.SerializeError.InvalidData;
     return buffer.toOwnedSlice();
 }
