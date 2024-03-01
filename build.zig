@@ -5,6 +5,7 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
+    buildJson(b);
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -117,4 +118,21 @@ fn buildJson(b: *std.Build, target: std.zig.CrossTarget, optimize: std.builtin.O
     });
 
     return exe;
+}
+
+fn buildJson(b: *std.Build) void {
+    // const target = b.standardTargetOptions(.{});
+    // const optimize = b.standardOptimizeOption(.{});
+    
+    const exe = b.addExecutable(.{
+        // executable file name is "[name]"
+        .name = "json-parser",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_source_file = .{ .path = "src/main_json.zig" },
+        // .target = target,
+        // .optimize = optimize,
+    });
+
+    b.installArtifact(exe);
 }
