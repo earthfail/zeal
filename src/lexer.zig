@@ -2,22 +2,13 @@
 
 const std = @import("std");
 const mem = std.mem;
-// const log = std.log;
+
 const unicode = std.unicode;
 const ascii = std.ascii;
 const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
-
-// pub const std_options = struct {
-//     // Set the log level to info
-//     pub const log_level = .warn;
-
-//     // Define logFn to override the std implementation
-//     // pub const logFn = myLogFn;
-// };
-// const lexer_log = std.log.scoped(.lexer);
 
 const ziglyph = @import("ziglyph");
 const Grapheme = ziglyph.Grapheme;
@@ -31,10 +22,6 @@ pub fn lexString(g_allocator: mem.Allocator, s: []const u8) !void {
     var edn_iter = Iterator.init(g_allocator, s);
     while (edn_iter.next()) |token| {
         defer token.deinit(g_allocator);
-        // defer if (token.literal) |c| {
-        //     if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.integer or token.tag == Tag.float)
-        //         edn_iter.allocator.free(c);
-        // };
         try stdio.print("got '{s}' {}\n", .{ token, token.tag });
     } else {
         try stdio.print("got null\n", .{});
@@ -73,7 +60,6 @@ pub const Iterator = struct {
         if (c == null) {
             return null;
         }
-        // std.debug.print("-----------------------------{} --- {}\n", .{ @intFromPtr(c.?.ptr), @intFromPtr(self.iter.bytes.ptr) });
         switch (c.?[0]) {
             inline '{', '[', '(', ')', ']', '}' => |del| {
                 _ = self.iter.nextSlice();
@@ -82,7 +68,6 @@ pub const Iterator = struct {
             '#' => {
                 _ = self.iter.nextSlice();
                 const c2 = self.iter.peekSlice();
-                // defer _ = self.iter.next(); // REPLACE after implementing tagged elements
                 if (c2 == null)
                     return IterError.PoundErr;
                 switch (c2.?[0]) {
@@ -105,7 +90,6 @@ pub const Iterator = struct {
                 const character = try self.readCharacterValue();
                 errdefer self.allocator.free(character);
                 const size = character.len;
-                //std.debug.print("aaaa debug c '{s}' {0any} {d}\n", .{ character, size });
 
                 if (size == 0)
                     return IterError.CharacterNull;
@@ -155,8 +139,8 @@ pub const Iterator = struct {
             },
             ';' => {
                 _ = self.iter.nextSlice();
-                while(self.iter.nextSlice()) |c2| {
-                    if(mem.eql(u8,c2,"\n"))
+                while (self.iter.nextSlice()) |c2| {
+                    if (mem.eql(u8, c2, "\n"))
                         break;
                 }
                 return self.next2();
@@ -164,21 +148,18 @@ pub const Iterator = struct {
             '\"' => {
                 _ = self.iter.nextSlice();
                 const string = try self.readString();
-                // std.debug.print("aaaa debug string '{s}' {0any}\n", .{ string});
                 return Token{ .tag = Tag.string, .literal = string };
             },
             else => {
                 var is_digit: bool = digit: {
                     var iter = self.iter; // copy iterator
                     const s = iter.nextSlice();
-                    // std.debug.print("{any}\n",.{s});
                     assert(s != null); // guaranteed by switch first if statement
                     const c1 = firstCodePoint(s.?);
                     if (ziglyph.isAsciiDigit(c1))
                         break :digit true;
                     if ('+' == c1 or '-' == c1) {
                         if (iter.nextSlice()) |c2| {
-                            // if (ziglyph.isAsciiDigit(try unicode.utf8Decode(c2)))
                             if (ziglyph.isAsciiDigit(firstCodePoint(c2)))
                                 break :digit true;
                         }
@@ -186,12 +167,9 @@ pub const Iterator = struct {
                     break :digit false;
                 };
                 if (is_digit) {
-                    // std.debug.print("c= '{s}' {0any}\n", .{c.?});
                     return try self.readNumber();
                 } else {
-                    // std.debug.print("c= '{s}' {0any}\n", .{c.?});
                     const symbol = try self.readSymbol();
-                    // std.debug.print("sssssss '{s}'\n", .{symbol});
                     return Token{ .tag = Tag.symbol, .literal = symbol };
                 }
             },
@@ -209,23 +187,11 @@ pub const Iterator = struct {
                         break;
                 }
             } else break;
-            // std.debug.print("________________________________________________ignoring seperator '{0s}' {any}\n", .{c});
         }
     }
     pub fn readNumber(self: *Iterator) !Token {
         var output = ArrayList(u8).init(self.allocator);
         errdefer output.deinit();
-        // if (self.iter.peekSlice()) |prefix| {
-        //     const c1 = firstCodePoint(prefix);
-        //     if ('-' == c1) {
-        //         _ = self.iter.nextSlice();
-        //         try output.appendSlice(prefix);
-        //     }
-        //     if ('+' == c1) {
-        //         _ = self.iter.nextSlice();
-        //     }
-        // } else unreachable; // guaranteed by predicates in switch statement
-        // decided to replace code above with slightly less optimal code to improve clarity
         try self.readSign(&output);
         if (self.iter.nextSlice()) |digit| {
             const c1 = firstCodePoint(digit);
@@ -305,29 +271,6 @@ pub const Iterator = struct {
             } else break;
         }
         return try bytes_arr.toOwnedSlice();
-        // // std.debug.print("wwwwwww '{s}' {0any}\n",.{self.iter.peekSlice().?});
-        // var original_i: usize = undefined;
-        // if (self.iter.window) |w| {
-        //     original_i = w.offset;
-        // } else return "gogogogog";
-
-        // var end_ix = original_i;
-        // defer std.debug.print("oi={} ei={}\n", .{ original_i, end_ix });
-
-        // std.debug.print("------------reading '{s}' {0any}\n",.{self.iter.nextSlice().?});
-        // // consume first character
-        // end_ix += if(self.iter.nextSlice()) |s| s.len else 0;
-        // while (self.iter.peekSlice()) |c| {
-        //     std.debug.print("------------reading '{s}' {0any}\n",.{c});
-        //     if (!isSeparator(c) and !isDelimiter(c))
-        //         end_ix += c.len
-        //     else
-        //         break;
-        //     // advance iterator
-        //     _ = self.iter.next();
-        //     // self.iter.i += c.len;
-        // } else return self.iter.bytes[original_i..];
-        // return self.iter.bytes[original_i .. end_ix + 1];
     }
     pub fn readString(self: *Iterator) ![]const u8 {
         var output = std.ArrayList(u8).init(self.allocator);
@@ -366,17 +309,14 @@ pub const Iterator = struct {
         errdefer output.deinit();
 
         if (self.iter.nextSlice()) |first| {
-            // assert(!isSeparator(first)); // guaranteed by the next2 function
-            if(!isSeparator(first)) {
+            if (!isSeparator(first)) {
                 return IterError.SymbolErr;
             }
-            // const firstu21 = try unicode.utf8Decode(first);
             const firstu21 = firstCodePoint(first);
             if (ziglyph.isNumber(firstu21))
                 return IterError.SymbolErr;
             if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
                 return IterError.SymbolErr;
-            // return error.e1;
             if ('/' == firstu21) {
                 empty_prefix = true;
                 encountered_slash = true;
@@ -384,7 +324,6 @@ pub const Iterator = struct {
             try output.appendSlice(first);
             if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                 if (self.iter.peekSlice()) |second| {
-                    // if (ziglyph.isNumber(try unicode.utf8Decode(second)))
                     if (ziglyph.isNumber(firstCodePoint(second)))
                         return IterError.SymbolErr;
                 } else return try output.toOwnedSlice();
@@ -399,10 +338,7 @@ pub const Iterator = struct {
             }
         }
         while (self.iter.peekSlice()) |c| {
-            // std.debug.print("getting c='{s}'\n", .{c});
-            // const cu21 = try unicode.utf8Decode(c);
             const cu21 = firstCodePoint(c);
-            // std.debug.print("c in u21 is '{d}'\n", .{cu21});
             if (ziglyph.isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
                 _ = self.iter.nextSlice(); // consume c
                 try output.appendSlice(c);
@@ -418,7 +354,7 @@ pub const Iterator = struct {
                 if (self.iter.nextSlice()) |first| {
                     if (isSeparator(first))
                         return IterError.SymbolErr; // name should not be empty
-                    // const firstu21 = try unicode.utf8Decode(first);
+
                     const firstu21 = firstCodePoint(first);
                     if (ziglyph.isNumber(firstu21))
                         return IterError.SymbolErr;
@@ -428,7 +364,6 @@ pub const Iterator = struct {
                     try output.appendSlice(first);
                     if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                         if (self.iter.peekSlice()) |second| {
-                            // if (ziglyph.isNumber(try unicode.utf8Decode(second)))
                             if (ziglyph.isNumber(firstCodePoint(second)))
                                 return IterError.SymbolErr;
                         } else {
@@ -517,7 +452,6 @@ pub const Iterator = struct {
 /// std.mem.eql(u8,c1,c2)
 /// and self.peek is idempotent
 const MyGraphemeIter = struct {
-    // buffer: [2]?Grapheme = [_]?Grapheme{null,null}, // first is the current Grapheme
     window: ?Grapheme = null,
     iter: Grapheme.GraphemeIterator,
     bytes: []const u8,
@@ -583,12 +517,6 @@ pub const Token = struct {
             .@"]" => try writer.writeAll("]"),
             .@"#{" => try writer.writeAll("#{"),
             .@"#_" => try writer.writeAll("#_"),
-            // .nil => try writer.writeAll("nil"),
-            // .boolean => {
-            //     if (value.literal) |b| {
-            //         try writer.writeAll(b);
-            //     } else try writer.writeAll("null bool");
-            // },
             .string => {
                 if (value.literal) |s| {
                     try writer.writeAll("\"");
@@ -597,7 +525,6 @@ pub const Token = struct {
                 } else try writer.writeAll("null string");
             },
             .character => {
-                // try writer.writeAll("character '");
                 if (value.literal) |c| {
                     if (c.len == 1) {
                         switch (c[0]) {
@@ -615,37 +542,30 @@ pub const Token = struct {
                         try writer.writeAll(c);
                     }
                 } else try writer.writeAll("null character");
-                // try writer.writeAll("'");
             },
             .symbol => {
-                // try writer.writeAll("symbol");
                 if (value.literal) |sym| {
-                    // try writer.writeAll("'");
                     try writer.writeAll(sym);
                 } else try writer.writeAll("null symbol");
             },
             .keyword => {
-                // try writer.writeAll("keyword");
                 if (value.literal) |key| {
                     try writer.writeAll(":");
                     try writer.writeAll(key);
                 } else try writer.writeAll("null keyword");
             },
             .tag => {
-                // try writer.writeAll("tag");
                 if (value.literal) |t| {
                     try writer.writeAll("#");
                     try writer.writeAll(t);
                 } else try writer.writeAll("null tag");
             },
             .integer => {
-                // try writer.writeAll("int");
                 if (value.literal) |i| {
                     try writer.print("{s}", .{i});
                 } else try writer.writeAll("null integer");
             },
             .float => {
-                // try writer.writeAll("float");
                 if (value.literal) |i| {
                     try writer.print("{s}", .{i});
                 } else try writer.writeAll("null float");
@@ -664,8 +584,6 @@ pub const Tag = enum {
     @"#{",
     @"#_",
     tag,
-    // nil,
-    // boolean,
     string,
     character,
     symbol,
@@ -709,9 +627,7 @@ test "test characters and strings" {
                         iterator.allocator.free(c);
                 };
                 try fbsw.print("{s} ", .{token});
-                // defer {if(token.literal) |l| allocator.free(l);}
             } else {
-                // try fbsw.print("got null\n", .{});
                 break;
             }
         } else |err| {
@@ -719,7 +635,7 @@ test "test characters and strings" {
         }
 
         testing.expect(mem.eql(u8, fbs.getWritten(), expected_buffer)) catch {
-            std.debug.print("****************************************************************output didn't mean the expectations\n", .{});
+            std.debug.print("****************************************************************output didn't meat the expectations\n", .{});
             std.debug.print("output: {s}\n", .{fbs.getWritten()});
             std.debug.print("expect: {s}\n", .{expected_buffer});
         };
@@ -768,31 +684,3 @@ test "test symbols" {
         };
     }
 }
-// fn foo(x: i32) i32 {
-//         std.debug.print("fakdsjflajdflkasjdflajdflk\n",.{});
-//         return x+1;
-//     }
-// test "testing debug" {
-//     try testing.expect(foo(1) == 1+1);
-// }
-// {
-//     var utf8 = (try std.unicode.Utf8View.init("😄سليم خطيب")).iterator();
-//     while (utf8.nextCodepointSlice()) |codepoint| {
-//         std.debug.print("got codepoint {any} {0s}\n", .{codepoint});
-//     }
-// }
-// \£ \😄 \u00a3
-// {
-//     var utf8 = (try std.unicode.Utf8View.init("salim")).iterator();
-//     std.debug.print("sss = {any} {0s}\n",.{utf8.nextCodepointSlice().?});
-//     // while (utf8.nextCodepointSlice()) |codepoint| {
-//     //     std.debug.print("got codepoint {any} {0s}\n", .{codepoint});
-//     // }
-// }
-// std.debug.print("\u{0065}\u{0301}", .{});
-// \newline\return \t
-
-// const chutf8 = try std.fmt.parseInt(u21, "00a3", 16);
-// var out = [_]u8{0} ** 3;
-// try stdio.print("d= {}\n", .{try unicode.utf8Encode(chutf8, &out)});
-// try stdio.print("{0any} '{0s}'\n", .{out});

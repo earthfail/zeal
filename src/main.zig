@@ -10,7 +10,6 @@ const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-// const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const EdnReader = parser.EdnReader;
 const Edn = parser.Edn;
@@ -42,11 +41,10 @@ fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
 
 fn repl_edn() !void {
     var gpa = std.heap.GeneralPurposeAllocator(
-    //.{ .verbose_log = true, .retain_metadata = true }
     .{}){};
     const g_allocator = gpa.allocator();
     defer {
-        // _ = gpa.detectLeaks();
+        _ = gpa.detectLeaks();
 
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) expect(false) catch {
@@ -66,16 +64,12 @@ fn repl_edn() !void {
                     std.debug.print("gpa detected leaks with input '{s}'\n", .{input});
                 }
             }
-            // const allocator = arena.allocator();
             var reader = EdnReader.init(g_allocator, input);
             reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
             try reader.data_readers.?.put("inst", edn_to_inst);
             defer reader.deinit();
-            // if (EdnReader.readEdn(allocator, &iter)) |edn| {
             if (reader.readEdn()) |edn| {
                 log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
-                // log.info("edn from log {}\n",.{edn.*});
-                // try stdout.print("{}\n", .{edn.*});
                 const serialize = try parser.Edn.serialize(edn.*, g_allocator);
                 defer g_allocator.free(serialize);
 
@@ -84,7 +78,6 @@ fn repl_edn() !void {
                 edn.deinit(g_allocator);
             } else |err| {
                 try stdout.print("got error parsing input {}. Salam\n", .{err});
-                // break;
             }
         } else break;
     }
@@ -150,35 +143,7 @@ pub fn main() !void {
 
     std.debug.print("{}\n",.{@as(f64,@floatFromInt(t.read()))/1000_000});
     
-    // else |err| {
-    //     // try stdout.print("got error parsing input {}. Salam\n", .{err});
-    //     // break;
-    // }
-
-    // std.debug.print("{}\n", .{@sizeOf(mem.Allocator)});
-    // std.debug.print("{} {} {} {} {}\n", .{ @sizeOf(EdnReader), @sizeOf(Edn), @sizeOf(big.Rational), @sizeOf(lexer.Iterator), @sizeOf(lexer.Token) });
-    // try repl_token();
-    // try repl_edn();
-    // try readEdn("baby");
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const g_allocator = gpa.allocator();
-    // defer {
-    //     _ = gpa.detectLeaks();
-
-    //     const deinit_status = gpa.deinit();
-    //     if (deinit_status == .leak) expect(false) catch @panic("leaked");
-    // }
-    // var x: i32 = 10;
-    // var p: *const i32 = &x;
-    // std.debug.print("{*} {*}\n", .{ p, @constCast(p) });
-    // std.debug.print("honey {*}\n",.{&g_allocator});
-    // var x = try f1(g_allocator);
-    // std.debug.print("value {}\n",.{x});
-    // g_allocator.destroy(&x);
-    // g_allocator2.destroy(x);
-    // var a = try readBigInteger(g_allocator, "1234");
-    // std.debug.print("{*}\n",.{&a});
-    // a.deinit();
+    
 }
 fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
     switch (edn) {

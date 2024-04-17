@@ -225,17 +225,14 @@ pub const EdnReader = struct {
                                 return value;
                             },
                             else => {
-                                // const key = try EdnReader.readEdn(allocator, iter);
                                 const key = try self.readEdn();
                                 errdefer key.deinit(allocator);
 
-                                // const val = try readEdn(allocator, iter);
                                 if (iter.peek()) |token3| {
                                     switch (token3.tag) {
                                         .@")", .@"]" => return error.ParenMismatch2,
                                         .@"}" => return error.OddNumberHashMap,
                                         else => {
-                                            // const val = try EdnReader.readEdn(allocator, iter);
                                             const val = try self.readEdn();
                                             errdefer val.deinit(allocator);
 
@@ -249,13 +246,11 @@ pub const EdnReader = struct {
                     return error.@"collection delimiter";
                 },
                 .@"#_" => {
-                    // const t = try EdnReader.readEdn(allocator, iter);
                     const t = try self.readEdn();
                     t.deinit(allocator);
                     return self.readEdn();
                 },
                 .tag => {
-                    // var value = allocator.create(Edn);
                     errdefer allocator.free(token.literal.?);
                     var value = try allocator.create(Edn);
                     errdefer {
@@ -263,17 +258,11 @@ pub const EdnReader = struct {
                         allocator.destroy(value);
                     }
 
-                    // const tag_value = try EdnReader.readEdn(allocator, iter);
                     const tag_value = try self.readEdn();
                     errdefer {
                         std.debug.print("removing tag_value\n", .{});
                         tag_value.deinit(allocator);
                     }
-                    // var tag_element = try allocator.create(Tag);
-                    // errdefer allocator.destroy(tag_element);
-                    // tag_element.tag = token.literal.?;
-                    // tag_element.element = .{ .edn = tag_value };
-                    // value.* = .{ .tag = tag_element.* };
                     if (self.data_readers) |readers| {
                         if (readers.get(token.literal.?)) |reader| {
                             const v = try reader(allocator, tag_value.*);
@@ -364,7 +353,6 @@ pub const Edn = union(enum) {
                 var iterator = collection.iterator();
                 while (iterator.next()) |entry| {
                     entry.key_ptr.*.deinit(allocator);
-                    // entry.value_ptr.*.deinit(allocator);
                 }
                 collection.deinit();
                 allocator.destroy(self);
