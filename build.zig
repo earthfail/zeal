@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const json_step = buildJson(b, target, optimize);
 
 
     // ziglyph
@@ -99,7 +100,21 @@ pub fn build(b: *std.Build) void {
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);
     }
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
+
+    const benchmark = b.step("bench", "Run main.zip and main_json.zig");
+    const run_json = b.addRunArtifact(json_step);
+    run_json.step.dependOn(b.getInstallStep());
+    benchmark.dependOn(&run_json.step);
+    benchmark.dependOn(&run_cmd.step);
+}
+
+fn buildJson(b: *std.Build, target: std.zig.CrossTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "json-parser",
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = .{ .path = "src/main_json.zig" },
+    });
+
+    return exe;
 }
