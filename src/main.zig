@@ -10,12 +10,14 @@ const expect = std.testing.expect;
 const testing = std.testing;
 const assert = std.debug.assert;
 
+const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const EdnReader = parser.EdnReader;
 const Edn = parser.Edn;
 const TagHandler = parser.TagHandler;
 const TagError = parser.TagError;
 const TagElement = parser.TagElement;
+
 // overrides std_options. see zig/lib/std/std.zig options_override
 pub const std_options = struct {
     // Set the log level to info
@@ -38,10 +40,51 @@ fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
         return line;
     }
 }
+fn repl_token() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const g_allocator = gpa.allocator();
+    defer {
+        _ = gpa.detectLeaks();
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) expect(false) catch {
+            @panic("gpa leaked");
+        };
+    }
+    var logging_allocator = std.heap.LoggingAllocator(.debug, .debug).init(g_allocator);
+    const allocator = logging_allocator.allocator();
+    const stdout = std.io.getStdOut().writer();
+    const stdin = std.io.getStdIn().reader();
+    var buffer: [2000]u8 = undefined;
 
+    //     var game_dyn_lib: ?std.DynLib = null;
+    // fn loadGameDll() !void {
+    //     if (game_dyn_lib != null) return error.AlreadyLoaded;
+    //     // const libName = "game.dll";
+    //     const libName = "libgame.so";
+    //     var dyn_lib = std.DynLib.open("zig-out/lib/" ++ libName) catch {
+    //         return error.OpenFail;
+    //     };
+    //     game_dyn_lib = dyn_lib;
+    //     gameInit = dyn_lib.lookup(@TypeOf(gameInit), "gameInit") orelse return error.LookUpFail;
+    //     gameReload = dyn_lib.lookup(@TypeOf(gameReload), "gameReload") orelse return error.LookUpFail;
+    //     gameTick = dyn_lib.lookup(@TypeOf(gameTick), "gameTick") orelse return error.LookUpFail;
+    //     gameDraw = dyn_lib.lookup(@TypeOf(gameDraw), "gameDraw") orelse return error.LookUpFail;
+    //     std.debug.print("----------------Loaded game.dll/libgame.so\n----------------\n", .{});
+    // }
+
+    try stdout.print("lexing\n", .{});
+    while (true) {
+        try stdout.print("reading input:", .{});
+        if (try nextLine(stdin, &buffer)) |input| {
+            try lexer.lexString(allocator, input);
+        } else {
+            std.debug.print("didn't read anything\n", .{});
+            break;
+        }
+    }
+}
 fn repl_edn() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(
-    .{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const g_allocator = gpa.allocator();
     defer {
         _ = gpa.detectLeaks();
@@ -64,7 +107,7 @@ fn repl_edn() !void {
                     std.debug.print("gpa detected leaks with input '{s}'\n", .{input});
                 }
             }
-            var reader = EdnReader.init(g_allocator, input);
+            var reader = try EdnReader.init(g_allocator, input);
             reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
             try reader.data_readers.?.put("inst", edn_to_inst);
             defer reader.deinit();
@@ -84,8 +127,11 @@ fn repl_edn() !void {
     try stdout.print("finished\n", .{});
 }
 
-// clojure koans
 pub fn main() !void {
+    try repl_token();
+}
+// clojure koans
+pub fn benchmark_main() !void {
     var t = try std.time.Timer.start();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -95,7 +141,7 @@ pub fn main() !void {
     const args = try process.argsAlloc(allocator);
     defer process.argsFree(allocator, args);
 
-    const file_name = if(args.len>1) args[1] else "resources/a.edn";
+    const file_name = if (args.len > 1) args[1] else "resources/a.edn";
     // const file_name = "resources/64KB.edn";
     const file = try fs.cwd().openFile(file_name, .{});
     defer file.close();
@@ -115,7 +161,7 @@ pub fn main() !void {
     // std.debug.print("input is '{s}'\n", .{input});
 
     const stdout = std.io.getStdOut().writer();
-    var edn_reader = EdnReader.init(allocator, input);
+    var edn_reader = try EdnReader.init(allocator, input);
     // reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
     // try reader.data_readers.?.put("inst", edn_to_inst);
     defer edn_reader.deinit();
@@ -127,23 +173,20 @@ pub fn main() !void {
         const serialize = try parser.Edn.serialize(edn.*, allocator);
         defer allocator.free(serialize);
 
-        switch(edn.*) {
+        switch (edn.*) {
             .list, .vector => |v| {
-                try stdout.print("length is {}\n",.{v.items.len});
-                
+                try stdout.print("length is {}\n", .{v.items.len});
             },
             else => {
-                try stdout.print("output is not a vector\n",.{});
-            }
+                try stdout.print("output is not a vector\n", .{});
+            },
         }
         // try stdout.print("{s}\n", .{serialize});
 
         edn.deinit(allocator);
     } else |_| {}
 
-    std.debug.print("{}\n",.{@as(f64,@floatFromInt(t.read()))/1000_000});
-    
-    
+    std.debug.print("{}\n", .{@as(f64, @floatFromInt(t.read())) / 1000_000});
 }
 fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
     switch (edn) {
