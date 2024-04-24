@@ -1,15 +1,14 @@
 // https://ziglang.org/learn/build-system/
 const std = @import("std");
-
+// TODO: change name from zeal to end_parser
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
-    const json_step = buildJson(b, target, optimize);
-
     const target = b.standardTargetOptions(.{});
-
     const optimize = b.standardOptimizeOption(.{});
+
+    const json_step = buildJson(b, target, optimize);
 
     // ziglyph
     const ziglyph = b.dependency("ziglyph", .{
@@ -20,14 +19,14 @@ pub fn build(b: *std.Build) void {
     const module = b.option(bool, "add_module", "make module from edn.zig") orelse false;
     if (module) {
         _ = b.addModule("zeal", .{
-            .source_file = .{ .path = "src/edn.zig" },
-            .dependencies = &.{
-                // zig uses this information to add ziglyph when adding zeal
-                .{
-                    .name = "ziglyph",
-                    .module = ziglyph.module("ziglyph"),
-                },
-            },
+            .root_source_file = .{ .path = "src/edn.zig" },
+            // .dependencies = &.{
+            //     // zig uses this information to add ziglyph when adding zeal
+            //     .{
+            //         .name = "ziglyph",
+            //         .module = ziglyph.module("ziglyph"),
+            //     },
+            // },
         });
     }
     //// useful if I want to create a static library
@@ -48,12 +47,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("ziglyph", ziglyph.module("ziglyph"));
+    exe.root_module.addImport("ziglyph", ziglyph.module("ziglyph"));
 
+    {
+        const tracy_enable = b.option(bool, "tracy-enable", "Enable Profiling") orelse false;
+        const tracy = b.dependency("tracy-zig", .{
+            .target = target,
+            .optimize = optimize,
+            .tracy_enable = tracy_enable,
+        });
+        json_step.root_module.addImport("tracy", tracy.module("tracy"));
+        json_step.linkLibrary(tracy.artifact("tracy"));
+        json_step.linkLibCpp();
+
+        exe.root_module.addImport("tracy", tracy.module("tracy"));
+        exe.linkLibrary(tracy.artifact("tracy"));
+        exe.linkLibCpp();
+    }
     // exe.addModule("zeal",zeal);
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -75,20 +86,21 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        unit_tests.addModule("ziglyph", ziglyph.module("ziglyph"));
+        unit_tests.root_module.addImport("ziglyph", ziglyph.module("ziglyph"));
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);
     }
 
-    const benchmark = b.step("bench", "Run main.zip and main_json.zig");
+    // const benchmark = b.step("bench", "Run main.zip and main_json.zig");
+    const benchmark = b.step("json", "Run main_json.zig");
     const run_json = b.addRunArtifact(json_step);
     run_json.step.dependOn(b.getInstallStep());
     benchmark.dependOn(&run_json.step);
-    benchmark.dependOn(&run_cmd.step);
+    // benchmark.dependOn(&run_cmd.step);
 }
 
-fn buildJson(b: *std.Build, target: std.zig.CrossTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+fn buildJson(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "json-parser",
         .target = target,

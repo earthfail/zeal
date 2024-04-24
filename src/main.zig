@@ -1,5 +1,7 @@
 // https://discord.com/channels/605571803288698900/1173940455872933978/1173941982448603228
 
+const tracy = @import("tracy");
+
 const std = @import("std");
 const process = std.process;
 const fs = std.fs;
@@ -19,17 +21,18 @@ const TagError = parser.TagError;
 const TagElement = parser.TagElement;
 
 // overrides std_options. see zig/lib/std/std.zig options_override
-pub const std_options = struct {
+pub const std_options = std.Options{
     // Set the log level to info
-    pub const log_level = .info;
+    .log_level = .info,
+    // pub const log_level = .info;
 
     // Define logFn to override the std implementation
     // pub const logFn = myLogFn;
-    pub const logFn = log.defaultLog;
+    // pub const logFn = log.defaultLog;
 };
 
 fn nextLine(reader: anytype, buffer: []u8) !?[]const u8 {
-    var line = (try reader.readUntilDelimiterOrEof(
+    const line = (try reader.readUntilDelimiterOrEof(
         buffer,
         '\n',
     )) orelse return null;
@@ -55,22 +58,6 @@ fn repl_token() !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
     var buffer: [2000]u8 = undefined;
-
-    //     var game_dyn_lib: ?std.DynLib = null;
-    // fn loadGameDll() !void {
-    //     if (game_dyn_lib != null) return error.AlreadyLoaded;
-    //     // const libName = "game.dll";
-    //     const libName = "libgame.so";
-    //     var dyn_lib = std.DynLib.open("zig-out/lib/" ++ libName) catch {
-    //         return error.OpenFail;
-    //     };
-    //     game_dyn_lib = dyn_lib;
-    //     gameInit = dyn_lib.lookup(@TypeOf(gameInit), "gameInit") orelse return error.LookUpFail;
-    //     gameReload = dyn_lib.lookup(@TypeOf(gameReload), "gameReload") orelse return error.LookUpFail;
-    //     gameTick = dyn_lib.lookup(@TypeOf(gameTick), "gameTick") orelse return error.LookUpFail;
-    //     gameDraw = dyn_lib.lookup(@TypeOf(gameDraw), "gameDraw") orelse return error.LookUpFail;
-    //     std.debug.print("----------------Loaded game.dll/libgame.so\n----------------\n", .{});
-    // }
 
     try stdout.print("lexing\n", .{});
     while (true) {
@@ -128,20 +115,25 @@ fn repl_edn() !void {
 }
 
 pub fn main() !void {
-    try repl_token();
+    // try repl_token();
+    try benchmark_main();
 }
 // clojure koans
 pub fn benchmark_main() !void {
-    var t = try std.time.Timer.start();
+    // var t = try std.time.Timer.start();
+    tracy.setThreadName("edn");
+    defer tracy.message("edn thread exit");
+    
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var os_allocator = tracy.TracingAllocator.initNamed("edn_gpa", gpa.allocator());
+    const allocator = os_allocator.allocator();
 
     const args = try process.argsAlloc(allocator);
     defer process.argsFree(allocator, args);
 
-    const file_name = if (args.len > 1) args[1] else "resources/a.edn";
+    const file_name = if (args.len > 1) args[1] else "resources/64KB.edn";
     // const file_name = "resources/64KB.edn";
     const file = try fs.cwd().openFile(file_name, .{});
     defer file.close();
@@ -166,7 +158,11 @@ pub fn benchmark_main() !void {
     // try reader.data_readers.?.put("inst", edn_to_inst);
     defer edn_reader.deinit();
     // if (EdnReader.readEdn(allocator, &iter)) |edn| {
+    var t = try std.time.Timer.start();
+    tracy.frameMark();
     if (edn_reader.readEdn()) |edn| {
+        const zone = tracy.initZone(@src(), .{ .name = "edn reader" });
+        defer zone.deinit();
         // log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
         // log.info("edn from log {}\n",.{edn.*});
         // try stdout.print("{}\n", .{edn.*});
@@ -178,7 +174,7 @@ pub fn benchmark_main() !void {
                 try stdout.print("length is {}\n", .{v.items.len});
             },
             else => {
-                try stdout.print("output is not a vector\n", .{});
+                try stdout.print("output is not a vector it is {}\n", .{edn});
             },
         }
         // try stdout.print("{s}\n", .{serialize});
@@ -191,7 +187,7 @@ pub fn benchmark_main() !void {
 fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
     switch (edn) {
         .integer => |i| {
-            var i_p = try allocator.create(@TypeOf(i));
+            const i_p = try allocator.create(@TypeOf(i));
             i_p.* = i + 10;
             var ele = try allocator.create(TagElement);
             ele.pointer = @intFromPtr(i_p);

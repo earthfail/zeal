@@ -14,10 +14,10 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
-const ziglyph = @import("ziglyph");
-const Grapheme = ziglyph.Grapheme;
-const GraphemeIter = Grapheme.GraphemeIterator;
-// https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
+// const ziglyph = @import("ziglyph");
+// const Grapheme = ziglyph.Grapheme;
+// const GraphemeIter = Grapheme.GraphemeIterator;
+// // https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
 // (try std.unicode.Utf8View.init("string")).iterator();
 pub fn lexString(allocator: mem.Allocator, s: []const u8) !void {
     std.debug.print("s={any}, {s}, {any}\n", .{ s.ptr, s, s });
@@ -132,7 +132,7 @@ pub const Iterator = struct {
                         if (!unicode.utf8ValidCodepoint(code_point))
                             return IterError.InvalidCharacter;
                         const len = try unicode.utf8CodepointSequenceLength(code_point);
-                        var out = try self.allocator.alloc(u8, len);
+                        const out = try self.allocator.alloc(u8, len);
                         if (unicode.utf8Encode(code_point, out)) |count| {
                             if (count != len)
                                 return IterError.InvalidCharacter;
@@ -172,16 +172,16 @@ pub const Iterator = struct {
                 return Token{ .tag = Tag.string, .literal = string };
             },
             else => {
-                var is_digit: bool = digit: {
+                const is_digit: bool = digit: {
                     var iter = self.iter; // copy iterator
                     const s = iter.nextCodepointSlice();
                     assert(s != null); // guaranteed by switch first if statement
                     const c1 = firstCodePoint(s.?);
-                    if (ziglyph.isAsciiDigit(c1))
+                    if (isDigit(c1))
                         break :digit true;
                     if ('+' == c1 or '-' == c1) {
                         if (iter.nextCodepointSlice()) |c2| {
-                            if (ziglyph.isAsciiDigit(firstCodePoint(c2)))
+                            if (isDigit(firstCodePoint(c2)))
                                 break :digit true;
                         }
                     }
@@ -272,7 +272,7 @@ pub const Iterator = struct {
                 const digit2 = self.iter.peek(1);
                 if (digit2.len != 0) {
                     const c2 = firstCodePoint(digit2);
-                    if (ziglyph.isAsciiDigit(c2))
+                    if (isDigit(c2))
                         return error.zeroPrefixNum;
                 }
             }
@@ -317,7 +317,7 @@ pub const Iterator = struct {
                         const d = self.iter.peek(1);
                         if (d.len != 0) {
                             const d1 = firstCodePoint(d);
-                            if (ziglyph.isAsciiDigit(d1) or '-' == d1 or '+' == d1) {
+                            if (isDigit(d1) or '-' == d1 or '+' == d1) {
                                 try self.readSign(&output);
                                 try self.readDigits(&output);
                                 exp = true;
@@ -393,9 +393,9 @@ pub const Iterator = struct {
                 return IterError.SymbolErr;
             }
             const firstu21 = unicode.utf8Decode(first) catch unreachable;
-            if (ziglyph.isNumber(firstu21))
+            if (isDigit(firstu21))
                 return IterError.SymbolErr;
-            if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
+            if (!isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
                 return IterError.SymbolErr;
             if ('/' == firstu21) {
                 empty_prefix = true;
@@ -405,7 +405,7 @@ pub const Iterator = struct {
             if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                 const second = self.iter.peek(1);
                 if (second.len == 0) {
-                    if (ziglyph.isNumber(unicode.utf8Decode(second) catch unreachable))
+                    if (isDigit(unicode.utf8Decode(second) catch unreachable))
                         return IterError.SymbolErr;
                 } else return try output.toOwnedSlice();
             }
@@ -426,7 +426,7 @@ pub const Iterator = struct {
 
         while (self.iter.nextCodepointSlice()) |c| : (original_i = self.iter.i) {
             const cu21 = unicode.utf8Decode(c) catch unreachable;
-            if (ziglyph.isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
+            if (isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
                 // _ = self.iter.nextCodepointSlice(); // consume c
                 try output.appendSlice(c);
                 continue;
@@ -443,16 +443,16 @@ pub const Iterator = struct {
                         return IterError.SymbolErr; // name should not be empty
 
                     const firstu21 = unicode.utf8Decode(first) catch unreachable;
-                    if (ziglyph.isNumber(firstu21))
+                    if (isDigit(firstu21))
                         return IterError.SymbolErr;
-                    if (!ziglyph.isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21))
+                    if (!isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21))
                         return IterError.SymbolErr;
 
                     try output.appendSlice(first);
                     if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
                         const second = self.iter.peek(1);
                         if (second.len != 0) {
-                            if (ziglyph.isNumber(unicode.utf8Decode(second) catch unreachable))
+                            if (isDigit(unicode.utf8Decode(second) catch unreachable))
                                 return IterError.SymbolErr;
                         } else {
                             assert(!empty_prefix); // guarantees that it is a valid symbol
@@ -479,6 +479,14 @@ pub const Iterator = struct {
             '.', '*', '+', '!', '-', '_', '?', '$', '%', '&', '=', '<', '>' => true,
             else => false,
         };
+    }
+    fn isDigit(c: u21) bool {
+        const c_ascii = math.cast(u8, c) orelse return false;
+        return ascii.isDigit(c_ascii);
+    }
+    fn isAlphaNum(c: u21) bool {
+        const c_ascii = math.cast(u8, c) orelse return false;
+        return ascii.isAlphanumeric(c_ascii);
     }
     fn isKeywordTagDelimiter(c: u21) bool {
         // TODO: test correctness without casting
@@ -535,7 +543,7 @@ pub const Iterator = struct {
         var original_i = self.iter.i;
         while (self.iter.nextCodepointSlice()) |digit| : (original_i = self.iter.i) {
             const code_point = firstCodePoint(digit);
-            if (ziglyph.isAsciiDigit(code_point)) {
+            if (isDigit(code_point)) {
                 try output.appendSlice(digit);
             } else {
                 self.iter.i = original_i;
@@ -552,46 +560,46 @@ pub const Iterator = struct {
 /// const c2 = self.next();
 /// std.mem.eql(u8,c1,c2)
 /// and self.peek is idempotent
-const MyGraphemeIter = struct {
-    window: ?Grapheme = null,
-    iter: Grapheme.GraphemeIterator,
-    bytes: []const u8,
-    // assume valid utf8 str
-    pub fn init(str: []const u8) MyGraphemeIter {
-        var iter = GraphemeIter.init(str);
-        var self = MyGraphemeIter{ .iter = iter, .bytes = str };
-        self.window = self.iter.next();
-        return self;
-    }
-    pub fn peek(self: MyGraphemeIter) ?Grapheme {
-        return self.window;
-    }
-    pub fn peekSlice(self: MyGraphemeIter) ?[]const u8 {
-        if (self.window) |window| {
-            return Grapheme.slice(window, self.bytes);
-        } else return null;
-    }
-    pub fn next(self: *MyGraphemeIter) ?Grapheme {
-        var next_g = self.iter.next();
+// const MyGraphemeIter = struct {
+//     window: ?Grapheme = null,
+//     iter: Grapheme.GraphemeIterator,
+//     bytes: []const u8,
+//     // assume valid utf8 str
+//     pub fn init(str: []const u8) MyGraphemeIter {
+//         const iter = GraphemeIter.init(str);
+//         var self = MyGraphemeIter{ .iter = iter, .bytes = str };
+//         self.window = self.iter.next();
+//         return self;
+//     }
+//     pub fn peek(self: MyGraphemeIter) ?Grapheme {
+//         return self.window;
+//     }
+//     pub fn peekSlice(self: MyGraphemeIter) ?[]const u8 {
+//         if (self.window) |window| {
+//             return Grapheme.slice(window, self.bytes);
+//         } else return null;
+//     }
+//     pub fn next(self: *MyGraphemeIter) ?Grapheme {
+//         const next_g = self.iter.next();
 
-        defer self.window = next_g;
-        return self.peek();
-    }
-    pub fn nextSlice(self: *MyGraphemeIter) ?[]const u8 {
-        var next_g = self.iter.next();
-        defer self.window = next_g;
-        return self.peekSlice();
-    }
-};
-fn debugMyGraphemeIter(s: []const u8) void {
-    var grapheme_iter = MyGraphemeIter.init(s);
-    while (grapheme_iter.peekSlice()) |token| {
-        const c = grapheme_iter.nextSlice();
-        std.debug.print("p='{s}' c='{s}'\n", .{ token, c orelse "END OF FILE" });
-    } else {
-        std.debug.print("reached end\n", .{});
-    }
-}
+//         defer self.window = next_g;
+//         return self.peek();
+//     }
+//     pub fn nextSlice(self: *MyGraphemeIter) ?[]const u8 {
+//         const next_g = self.iter.next();
+//         defer self.window = next_g;
+//         return self.peekSlice();
+//     }
+// };
+// fn debugMyGraphemeIter(s: []const u8) void {
+//     var grapheme_iter = MyGraphemeIter.init(s);
+//     while (grapheme_iter.peekSlice()) |token| {
+//         const c = grapheme_iter.nextSlice();
+//         std.debug.print("p='{s}' c='{s}'\n", .{ token, c orelse "END OF FILE" });
+//     } else {
+//         std.debug.print("reached end\n", .{});
+//     }
+// }
 
 pub const Token = struct {
     tag: Tag,

@@ -18,8 +18,8 @@ pub const EdnReader = struct {
     iter: lexer.Iterator,
     data_readers: ?std.StringHashMap(TagHandler) = null,
 
-    pub fn init(allocator: mem.Allocator, buffer: []const u8) EdnReader {
-        var iter = lexer.Iterator.init(allocator, buffer);
+    pub fn init(allocator: mem.Allocator, buffer: []const u8) !EdnReader {
+        const iter = try lexer.Iterator.init(allocator, buffer);
         return .{
             .iter = iter,
         };
@@ -206,7 +206,7 @@ pub const EdnReader = struct {
                                 const item = try self.readEdn();
                                 errdefer item.deinit(allocator);
 
-                                try value.hashset.put(item, item);
+                                try value.hashset.put(item, {});
                             },
                         }
                     }
@@ -252,7 +252,7 @@ pub const EdnReader = struct {
                 },
                 .tag => {
                     errdefer allocator.free(token.literal.?);
-                    var value = try allocator.create(Edn);
+                    const value = try allocator.create(Edn);
                     errdefer {
                         std.debug.print("removing value\n", .{});
                         allocator.destroy(value);
@@ -280,10 +280,7 @@ pub const EdnReader = struct {
                     return error.@"no collection defined";
                 },
             }
-        } else {
-            // log.warn("got null", .{});
         }
-
         return error.@"edn is an extensible data format";
     }
 };
@@ -311,7 +308,7 @@ pub const Edn = union(enum) {
     pub const List = std.ArrayList(*Edn);
     pub const Vector = std.ArrayList(*Edn);
     pub const Hashmap = std.AutoArrayHashMap(*Edn, *Edn);
-    pub const Hashset = std.AutoArrayHashMap(*Edn, *Edn);
+    pub const Hashset = std.AutoArrayHashMap(*Edn, void);
 
     const Nil = enum { nil };
     pub var nil = Edn{ .nil = Nil.nil };
