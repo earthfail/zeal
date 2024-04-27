@@ -7,6 +7,7 @@ const std = @import("std");
 const mem = std.mem;
 
 const unicode = std.unicode;
+const Utf8Iterator = unicode.Utf8Iterator;
 const ascii = std.ascii;
 const math = std.math;
 const expect = std.testing.expect;
@@ -14,21 +15,25 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
-// const ziglyph = @import("ziglyph");
-// const Grapheme = ziglyph.Grapheme;
-// const GraphemeIter = Grapheme.GraphemeIterator;
-// // https://zig.news/dude_the_builder/unicode-basics-in-zig-dj3
-// (try std.unicode.Utf8View.init("string")).iterator();
-pub fn lexString(allocator: mem.Allocator, s: []const u8) !void {
+/// debugging function to print what the lexer reads
+pub fn lexString(s: []const u8) !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const g_allocator = gpa.allocator();
+    defer {
+        _ = gpa.detectLeaks();
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) expect(false) catch {
+            @panic("gpa leaked");
+        };
+    }
     std.debug.print("s={any}, {s}, {any}\n", .{ s.ptr, s, s });
     const stdio = std.io.getStdOut().writer();
 
-    var edn_iter = Iterator.init(allocator, s) catch {
+    var edn_iter = Iterator.init(g_allocator, s) catch {
         std.debug.print("iterator failed sorry!\n", .{});
         return;
     };
     while (edn_iter.next()) |token| {
-        defer token.deinit(allocator);
         stdio.print("got '{s}' {}\n", .{ token, token.tag }) catch {
             std.debug.print("error writing token\n", .{});
             return;
@@ -41,24 +46,101 @@ pub fn lexString(allocator: mem.Allocator, s: []const u8) !void {
     }
 }
 
+test "test symbols" {
+    const inputs = [_][]const u8{
+        "é",
+        \\a/khatib / finé
+        ,
+        \\salim
+        ,
+    };
+    const expectations = [_][]const u8{
+        "é ",
+        \\a/khatib / finé
+        ,
+        \\salim
+        ,
+    };
+    for (inputs, expectations) |in, exp| {
+        var buffer: [255]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buffer);
+        var fbsw = fbs.writer();
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var iterator = try Iterator.init(in);
+        var tok = iterator.next();
+        while (tok) |token| : (tok = iterator.next()) {
+            try fbsw.print("{s} ", .{token});
+        }
+        testing.expect(mem.eql(u8, fbs.getWritten(), exp)) catch {
+            std.debug.print("****************************************************************output didn't mean the expectations\n", .{});
+            std.debug.print("output: {s}\n", .{fbs.getWritten()});
+            std.debug.print("expect: {s}\n", .{exp});
+        };
+    }
+}
+test "test characters and strings" {
+    const s_arr = [_][]const u8{
+        \\ [{(,)},] \é
+        \\#_#{,,,  ,
+        \\\space,\tab
+        \\\u00A3\£
+        ,
+        \\  "salim"
+        \\,"£ \\\t\\ money 😄"
+        \\"","okay\nnow" "finé"
+        \\"history\r\nis written by the\n just"
+        ,
+    };
+    const expected_arr = [_][]const u8{
+        "[ { ( ) } ] \\é #_ #{ \\space \\tab \\£ \\£ ",
+        "\"salim\" \"£ \\\t\\ money 😄\" \"\" \"okay\nnow\" \"finé\" \"history\r\nis written by the\n just\" ",
+    };
+    for (s_arr, expected_arr) |s, expected_buffer| {
+        var buffer: [255]u8 = undefined;
+
+        var fbs = std.io.fixedBufferStream(&buffer);
+        var fbsw = fbs.writer();
+
+        var iterator = try Iterator.init(s);
+        var tok = iterator.next();
+        while (tok) |token| : (tok = iterator.next()) {
+            try fbsw.print("{s} ", .{token});
+        }
+        testing.expect(mem.eql(u8, fbs.getWritten(), expected_buffer)) catch {
+            std.debug.print("****************************************************************output didn't meat the expectations\n", .{});
+            std.debug.print("output: {s}\n", .{fbs.getWritten()});
+            std.debug.print("expect: {s}\n", .{expected_buffer});
+        };
+    }
+}
+
+/// iterator has two main functions next,peek with the following properties:
+/// const c1 = self.peek();
+/// const c2 = self.next();
+/// std.mem.eql(u8,c1,c2)
+/// and self.peek is idempotent
 pub const Iterator = struct {
     iter: unicode.Utf8Iterator,
-    allocator: mem.Allocator = undefined,
+    // TODO: remove allocator dependence
+    allocator: mem.Allocator,
     window: ?Token = undefined,
+
+    // \<names[i]> is equivalent to \<chars[i]>
+    const names = [_][]const u8{ "space", "tab", "newline", "return" };
+    const chars = [_][]const u8{ " ", "\t", "\n", "\r" };
 
     const Self = @This();
     const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, NotFinished };
 
+    // TODO: remove allocator dependence
     pub fn init(allocator: mem.Allocator, str: []const u8) error{InvalidUtf8}!Iterator {
         var view = try unicode.Utf8View.init(str);
-        var self = Iterator{ .allocator = allocator, .iter = view.iterator() };
+        var self = Iterator{ .iter = view.iterator(), .allocator = allocator };
         self.window = self.next2() catch null;
         return self;
-    }
-    pub fn deinit(self: *Self) void {
-        if (self.window) |*window| {
-            window.deinit(self.allocator);
-        }
     }
     pub fn peek(self: Iterator) ?Token {
         return self.window;
@@ -73,7 +155,6 @@ pub const Iterator = struct {
         while (self.ignoreSeparator() or self.ignoreComment()) {}
 
         const c = self.iter.peek(1);
-        // std.debug.print("c is {s}\n", .{c});
 
         if (c.len == 0) {
             return null;
@@ -106,19 +187,18 @@ pub const Iterator = struct {
             '\\' => {
                 _ = self.iter.nextCodepointSlice();
                 const character = try self.readCharacterValue();
-                errdefer self.allocator.free(character);
+
                 const size = character.len;
 
                 if (size == 0)
                     return IterError.CharacterNull;
-                const names = [_][]const u8{ "space", "tab", "newline", "return" };
-                const chars = [_]u8{ ' ', '\t', '\n', '\r' };
+
                 inline for (names, chars) |name, char| {
                     if (mem.eql(u8, character, name)) {
-                        defer self.allocator.free(character); // unnecessary defer but used for consistency
-                        const literal = try self.allocator.alloc(u8, 1);
-                        literal[0] = char;
-                        return Token{ .tag = Tag.character, .literal = literal };
+                        // defer self.allocator.free(character); // unnecessary defer but used for consistency
+                        // const literal = try self.allocator.alloc(u8, 1);
+                        // literal[0] = char;
+                        return Token{ .tag = Tag.character, .literal = char };
                     }
                 }
                 if (character[0] == 'u') {
@@ -128,27 +208,18 @@ pub const Iterator = struct {
                         if (!ascii.isHex(d))
                             return IterError.InvalidCharacter;
                     } else {
-                        const code_point = try std.fmt.parseInt(u21, character[1..], 16);
-                        if (!unicode.utf8ValidCodepoint(code_point))
-                            return IterError.InvalidCharacter;
-                        const len = try unicode.utf8CodepointSequenceLength(code_point);
-                        const out = try self.allocator.alloc(u8, len);
-                        if (unicode.utf8Encode(code_point, out)) |count| {
-                            if (count != len)
-                                return IterError.InvalidCharacter;
-                        } else |err| return err;
-
-                        self.allocator.free(character);
-                        return Token{ .tag = Tag.character, .literal = out };
+                        // return uXXXX to parse in parser.zig
+                        return Token{ .tag = Tag.character, .literal = character };
                     }
                 }
-                const first_char_len = unicode.utf8ByteSequenceLength(character[0]) catch unreachable;
-                const second_char_len = unicode.utf8ByteSequenceLength(character[first_char_len]);
-                if (second_char_len) |second_char| {
-                    const c2 = character[first_char_len .. first_char_len + second_char];
-                    if (!isSeparator(c2) and !isDelimiter(c2))
-                        return IterError.InvalidCharacter;
-                } else |_| {}
+                // DON'T COMMIT: REMOVE this section
+                // const first_char_len = unicode.utf8ByteSequenceLength(character[0]) catch unreachable;
+                // const second_char_len = unicode.utf8ByteSequenceLength(character[first_char_len]);
+                // if (second_char_len) |second_char| {
+                //     const c2 = character[first_char_len .. first_char_len + second_char];
+                //     if (!isSeparator(c2) and !isDelimiter(c2))
+                //         return IterError.InvalidCharacter;
+                // } else |_| {}
                 return Token{ .tag = Tag.character, .literal = character };
             },
             ':' => {
@@ -156,18 +227,17 @@ pub const Iterator = struct {
                 const keyword = self.readSymbol() catch return IterError.KeywordErr;
                 return Token{ .tag = Tag.keyword, .literal = keyword };
             },
-            ';' => {
-                // TODO: test performance of replacing this block with ignoreComment
-                // _ = self.ignoreComment();
-                _ = self.iter.nextCodepointSlice();
-                while (self.iter.nextCodepointSlice()) |c2| {
-                    if (mem.eql(u8, c2, "\n"))
-                        break;
-                }
-                return self.next2();
-            },
+            // ';' => {
+            //     // TODO: test performance of replacing this block with ignoreComment
+            //     // _ = self.ignoreComment();
+            //     _ = self.iter.nextCodepointSlice();
+            //     while (self.iter.nextCodepointSlice()) |c2| {
+            //         if (mem.eql(u8, c2, "\n"))
+            //             break;
+            //     }
+            //     return self.next2();
+            // },
             '\"' => {
-                _ = self.iter.nextCodepointSlice();
                 const string = try self.readString();
                 return Token{ .tag = Tag.string, .literal = string };
             },
@@ -335,54 +405,71 @@ pub const Iterator = struct {
     }
     // character value is the string after \ in the format \3 \u123
     pub fn readCharacterValue(self: *Iterator) ![]const u8 {
-        var bytes_arr = std.ArrayList(u8).init(self.allocator);
-        if (self.iter.nextCodepointSlice()) |c| {
-            try bytes_arr.appendSlice(c);
-        } else return error.NoFirstCharacter;
+        const start_i = self.iter.i;
+        _ = self.iter.nextCodepointSlice() orelse return error.NoFirstCharacter;
 
-        var original_i = self.iter.i;
-        while (self.iter.nextCodepointSlice()) |c| : (original_i = self.iter.i) {
-            if (!isSeparator(c) and !isDelimiter(c)) {
-                try bytes_arr.appendSlice(c);
-            } else {
-                self.iter.i = original_i;
+        var end_i = self.iter.i;
+        while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
+            if (isSeparator(c) or isDelimiter(c)) {
+                self.iter.i = end_i;
                 break;
             }
         }
-        return try bytes_arr.toOwnedSlice();
+        return self.iter.bytes[start_i..end_i];
     }
 
     pub fn readString(self: *Iterator) ![]const u8 {
-        var output = std.ArrayList(u8).init(self.allocator);
-        errdefer output.deinit();
-
+        const original_i = self.iter.i;
+        if (self.iter.nextCodepointSlice()) |c| {
+            if (!mem.eql(u8, c, "\"")) {
+                return IterError.StringErr;
+            }
+        } else {
+            return IterError.StringErr;
+        }
         while (self.iter.nextCodepointSlice()) |c| {
             if (mem.eql(u8, c, "\""))
                 break;
             if (mem.eql(u8, c, "\\")) {
-                if (self.iter.nextCodepointSlice()) |quoted| {
-                    if (mem.eql(u8, quoted, "t")) {
-                        try output.append('\t');
-                    } else if (mem.eql(u8, quoted, "r")) {
-                        try output.append('\r');
-                    } else if (mem.eql(u8, quoted, "n")) {
-                        try output.append('\n');
-                    } else if (mem.eql(u8, quoted, "\\")) {
-                        try output.append('\\');
-                    } else if (mem.eql(u8, quoted, "\"")) {
-                        try output.append('\"');
-                    } else return IterError.StringErr;
-                    continue;
-                } else return IterError.StringErr;
+                // there must be a character after \
+                _ = self.iter.nextCodepointSlice() orelse return IterError.StringErr;
             }
-            try output.appendSlice(c);
         } else return IterError.StringErr;
-        return try output.toOwnedSlice();
+        const end_i = self.iter.i;
+
+        return self.iter.bytes[original_i..end_i];
     }
+    pub fn readSymbol(self: *Iterator) ![]const u8 {
+        const original_i = self.iter.i;
+        var end_i = original_i;
+        while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
+            if (isSeparator(c) or isCommentStart(c) or isDelimiter(c)) {
+                self.iter.i = end_i;
+                break;
+            }
+        }
+        // else {
+        //     end_i = self.iter.i;
+        // }
+        const symbol = self.iter.bytes[original_i..end_i];
+        if (symbol.len == 0) {
+            return IterError.SymbolErr;
+        }
+        // symbols only start with alphanumberic characters
+        if (ascii.isDigit(symbol[0])) {
+            return IterError.SymbolErr;
+        }
+        if (!ascii.isAlphanumeric(symbol[0]) and !isSymbolSpecialCharacter(symbol[0])) {
+            return IterError.SymbolErr;
+        }
+        // TODO: continue all tests
+        return symbol;
+    }
+
     /// I could also read whole symbol then validate it. Maybe I will try it in another function.
     /// But the iterface for parsing it cumbersome so I erred on the side of caution
     /// or I could copy the iterator to simplified validation. In later commits WTWOG (with the will of God)
-    pub fn readSymbol(self: *Iterator) ![]const u8 {
+    pub fn readSymbol_old(self: *Iterator) ![]const u8 {
         var output = std.ArrayList(u8).init(self.allocator);
         var encountered_slash = false;
         var empty_prefix = false;
@@ -474,8 +561,8 @@ pub const Iterator = struct {
     /// check the special character that a symbol can contain other than the alphanumberic
     fn isSymbolSpecialCharacter(c: u21) bool {
         // TODO: test correctness without casting
-        const c_ascii = math.cast(u8, c) orelse return false;
-        return switch (c_ascii) {
+        // const c_ascii = math.cast(u8, c) orelse return false;
+        return switch (c) {
             '.', '*', '+', '!', '-', '_', '?', '$', '%', '&', '=', '<', '>' => true,
             else => false,
         };
@@ -490,19 +577,27 @@ pub const Iterator = struct {
     }
     fn isKeywordTagDelimiter(c: u21) bool {
         // TODO: test correctness without casting
-        const c_ascii = math.cast(u8, c) orelse return false;
-        return c_ascii == ':' or c_ascii == '#';
+        // const c_ascii = math.cast(u8, c) orelse return false;
+        // return c_ascii == ':' or c_ascii == '#';
+        return c == ':' or c == '#';
     }
     fn isDelimiter(c: []const u8) bool {
-        return mem.eql(u8, c, "{") or
-            mem.eql(u8, c, "}") or
-            mem.eql(u8, c, "[") or
-            mem.eql(u8, c, "]") or
-            mem.eql(u8, c, "(") or
-            mem.eql(u8, c, ")") or
-            mem.eql(u8, c, "#") or
-            mem.eql(u8, c, "\\") or
-            mem.eql(u8, c, "\"");
+        if (c.len != 1) {
+            return false;
+        }
+        return switch (c[0]) {
+            '{', '}', '[', ']', '(', ')', '#', '\\', '\"' => true,
+            else => false,
+        };
+        // return mem.eql(u8, c, "{") or
+        //     mem.eql(u8, c, "}") or
+        //     mem.eql(u8, c, "[") or
+        //     mem.eql(u8, c, "]") or
+        //     mem.eql(u8, c, "(") or
+        //     mem.eql(u8, c, ")") or
+        //     mem.eql(u8, c, "#") or
+        //     mem.eql(u8, c, "\\") or
+        //     mem.eql(u8, c, "\"");
     }
     fn isCommentStart(c: []const u8) bool {
         if (c.len == 0)
@@ -554,66 +649,11 @@ pub const Iterator = struct {
         }
     }
 };
-/// implement peek for Grapheme.GraphemeIterator
-/// iterator has two main functions nextSlice,peekSlice with the following properties:
-/// const c1 = self.peek();
-/// const c2 = self.next();
-/// std.mem.eql(u8,c1,c2)
-/// and self.peek is idempotent
-// const MyGraphemeIter = struct {
-//     window: ?Grapheme = null,
-//     iter: Grapheme.GraphemeIterator,
-//     bytes: []const u8,
-//     // assume valid utf8 str
-//     pub fn init(str: []const u8) MyGraphemeIter {
-//         const iter = GraphemeIter.init(str);
-//         var self = MyGraphemeIter{ .iter = iter, .bytes = str };
-//         self.window = self.iter.next();
-//         return self;
-//     }
-//     pub fn peek(self: MyGraphemeIter) ?Grapheme {
-//         return self.window;
-//     }
-//     pub fn peekSlice(self: MyGraphemeIter) ?[]const u8 {
-//         if (self.window) |window| {
-//             return Grapheme.slice(window, self.bytes);
-//         } else return null;
-//     }
-//     pub fn next(self: *MyGraphemeIter) ?Grapheme {
-//         const next_g = self.iter.next();
-
-//         defer self.window = next_g;
-//         return self.peek();
-//     }
-//     pub fn nextSlice(self: *MyGraphemeIter) ?[]const u8 {
-//         const next_g = self.iter.next();
-//         defer self.window = next_g;
-//         return self.peekSlice();
-//     }
-// };
-// fn debugMyGraphemeIter(s: []const u8) void {
-//     var grapheme_iter = MyGraphemeIter.init(s);
-//     while (grapheme_iter.peekSlice()) |token| {
-//         const c = grapheme_iter.nextSlice();
-//         std.debug.print("p='{s}' c='{s}'\n", .{ token, c orelse "END OF FILE" });
-//     } else {
-//         std.debug.print("reached end\n", .{});
-//     }
-// }
 
 pub const Token = struct {
     tag: Tag,
     literal: ?[]const u8 = null,
-    pub fn deinit(self: *const Token, allocator: mem.Allocator) void {
-        if (self.literal) |c| {
-            switch (self.tag) {
-                .character, .string, .symbol, .integer, .float, .keyword, .tag => {
-                    allocator.free(c);
-                },
-                else => {},
-            }
-        }
-    }
+
     pub fn format(value: Token, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;
@@ -700,85 +740,3 @@ pub const Tag = enum {
     integer,
     float,
 };
-
-test "test characters and strings" {
-    const s_arr = [_][]const u8{
-        \\ [{(,)},] \é
-        \\#_#{,,,  ,
-        \\\space,\tab
-        \\\u00A3\£
-        ,
-        \\  "salim"
-        \\,"£ \\\t\\ money 😄"
-        \\"","okay\nnow" "finé"
-        \\"history\r\nis written by the\n just"
-        ,
-    };
-    const expected_arr = [_][]const u8{
-        "[ { ( ) } ] \\é #_ #{ \\space \\tab \\£ \\£ ",
-        "\"salim\" \"£ \\\t\\ money 😄\" \"\" \"okay\nnow\" \"finé\" \"history\r\nis written by the\n just\" ",
-    };
-    for (s_arr, expected_arr) |s, expected_buffer| {
-        var buffer: [255]u8 = undefined;
-
-        var fbs = std.io.fixedBufferStream(&buffer);
-        var fbsw = fbs.writer();
-
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-
-        var iterator = try Iterator.init(arena.allocator(), s);
-        var tok = iterator.next();
-        while (tok) |token| : (tok = iterator.next()) {
-            defer if (token.literal) |c| {
-                if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.tag)
-                    iterator.allocator.free(c);
-            };
-            try fbsw.print("{s} ", .{token});
-        }
-        testing.expect(mem.eql(u8, fbs.getWritten(), expected_buffer)) catch {
-            std.debug.print("****************************************************************output didn't meat the expectations\n", .{});
-            std.debug.print("output: {s}\n", .{fbs.getWritten()});
-            std.debug.print("expect: {s}\n", .{expected_buffer});
-        };
-    }
-}
-test "test symbols" {
-    const inputs = [_][]const u8{
-        "é",
-        \\a/khatib / finé
-        ,
-        \\salim
-        ,
-    };
-    const expectations = [_][]const u8{
-        "é ",
-        \\a/khatib / finé
-        ,
-        \\salim
-        ,
-    };
-    for (inputs, expectations) |in, exp| {
-        var buffer: [255]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buffer);
-        var fbsw = fbs.writer();
-
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-
-        var iterator = try Iterator.init(arena.allocator(), in);
-        var tok = iterator.next();
-        while (tok) |token| : (tok = iterator.next()) {
-            defer if (token.literal) |c| {
-                if (token.tag == Tag.character or token.tag == Tag.string or token.tag == Tag.symbol or token.tag == Tag.tag)
-                    iterator.allocator.free(c);
-            };
-            try fbsw.print("{s} ", .{token});
-        }
-        testing.expect(mem.eql(u8, fbs.getWritten(), exp)) catch {
-            std.debug.print("****************************************************************output didn't mean the expectations\n", .{});
-            std.debug.print("output: {s}\n", .{fbs.getWritten()});
-            std.debug.print("expect: {s}\n", .{exp});
-        };
-    }
-}

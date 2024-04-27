@@ -4,6 +4,9 @@ with faster parsing than standard `clojure.edn/read`[^2]
 
 # Status
 This is alpha software so expect bugs.
+## TODO
+- remove unnecessary allocator in lexer.zig
+- decrease allocations.
 
 ## Usage
 1. add `zeal` to `build.zig.zon`:
