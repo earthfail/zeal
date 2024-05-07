@@ -16,7 +16,8 @@ const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
 /// debugging function to print what the lexer reads
-pub fn lexString(s: []const u8) !void {
+pub const LexError = error{ initError, nullError };
+pub fn lexString(s: []const u8) LexError!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const g_allocator = gpa.allocator();
     defer {
@@ -26,22 +27,27 @@ pub fn lexString(s: []const u8) !void {
             @panic("gpa leaked");
         };
     }
-    std.debug.print("s={any}, {s}, {any}\n", .{ s.ptr, s, s });
+    // std.debug.print("s={any}, {s}, {any}\n", .{ s.ptr, s, s });
     const stdio = std.io.getStdOut().writer();
 
     var edn_iter = Iterator.init(g_allocator, s) catch {
         std.debug.print("iterator failed sorry!\n", .{});
-        return;
+        return LexError.initError;
     };
-    while (edn_iter.next()) |token| {
-        stdio.print("got '{s}' {}\n", .{ token, token.tag }) catch {
-            std.debug.print("error writing token\n", .{});
-            return;
-        };
-    } else {
-        stdio.print("got null\n", .{}) catch {
-            std.debug.print("error writing null\n", .{});
-            return;
+    while (edn_iter.nextError()) |t| {
+        if (t) |token| {
+            stdio.print("got '{s}' {}\n", .{ token, token.tag }) catch {
+                std.debug.print("error writing token\n", .{});
+                return;
+            };
+        } else {
+            stdio.print("got null \n", .{}) catch return;
+            break;
+        }
+    } else |err| {
+        stdio.print("got error {}\n", .{err}) catch {
+            std.debug.print("error writing error XXXXXD\n", .{});
+            return LexError.nullError;
         };
     }
 }
