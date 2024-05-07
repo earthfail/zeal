@@ -142,12 +142,19 @@ pub const Iterator = struct {
         self.window = self.next2() catch null;
         return self;
     }
+    pub fn deinit(self: *Iterator) void {
+        _ = self;
+        // self.allocator.destroy(self.window);
+    }
     pub fn peek(self: Iterator) ?Token {
         return self.window;
     }
     pub fn next(self: *Iterator) ?Token {
-        const next_token = self.next2();
-        defer self.window = next_token catch null;
+        return self.nextError() catch null;
+    }
+    pub fn nextError(self: *Iterator) !?Token {
+        const next_token = try self.next2();
+        defer self.window = next_token;
         return self.window;
     }
     pub fn next2(self: *Iterator) !?Token {
@@ -179,7 +186,11 @@ pub const Iterator = struct {
                         return Token{ .tag = Tag.@"#_", .literal = null };
                     },
                     else => {
-                        const tag = self.readSymbol() catch return IterError.PoundErr;
+                        const tag = self.readSymbolPartialTest() catch return IterError.PoundErr;
+                        // tags consists of "#" followed by an aphabetic character
+                        if (!ascii.isAlphabetic(tag[0])) {
+                            return IterError.PoundErr;
+                        }
                         return Token{ .tag = Tag.tag, .literal = tag };
                     },
                 }
@@ -224,7 +235,11 @@ pub const Iterator = struct {
             },
             ':' => {
                 _ = self.iter.nextCodepointSlice();
-                const keyword = self.readSymbol() catch return IterError.KeywordErr;
+                const keyword = self.readSymbolPartialTest() catch return IterError.KeywordErr;
+                // keywords cannot begin with "::"
+                if (keyword[0] == ':') {
+                    return IterError.KeywordErr;
+                }
                 return Token{ .tag = Tag.keyword, .literal = keyword };
             },
             // ';' => {
@@ -260,7 +275,10 @@ pub const Iterator = struct {
                 if (is_digit) {
                     return try self.readNumber();
                 } else {
-                    const symbol = try self.readSymbol();
+                    const symbol = try self.readSymbolPartialTest();
+                    if (isKeywordTagDelimiter(symbol[0])) {
+                        return IterError.SymbolErr;
+                    }
                     return Token{ .tag = Tag.symbol, .literal = symbol };
                 }
             },
@@ -439,7 +457,8 @@ pub const Iterator = struct {
 
         return self.iter.bytes[original_i..end_i];
     }
-    pub fn readSymbol(self: *Iterator) ![]const u8 {
+    // read symbol from iterator and test for correctness but does not test if first character is a tag or keyword delimiter
+    pub fn readSymbolPartialTest(self: *Iterator) ![]const u8 {
         const original_i = self.iter.i;
         var end_i = original_i;
         while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
@@ -448,19 +467,39 @@ pub const Iterator = struct {
                 break;
             }
         }
-        // else {
-        //     end_i = self.iter.i;
-        // }
         const symbol = self.iter.bytes[original_i..end_i];
         if (symbol.len == 0) {
             return IterError.SymbolErr;
         }
-        // symbols only start with alphanumberic characters
-        if (ascii.isDigit(symbol[0])) {
+        // symbols also don't start with ':' or '#', those are reserved for keywords and tags
+        // TODO: move keyword tag check outwards
+        //  or isKeywordTagDelimiter(symbol[0])
+        if (!isValidFirstCharacter(symbol)) {
             return IterError.SymbolErr;
         }
-        if (!ascii.isAlphanumeric(symbol[0]) and !isSymbolSpecialCharacter(symbol[0])) {
-            return IterError.SymbolErr;
+        {
+            // search for '/' and check if either both prefix and name are empty or not empty
+            var encountered_slash = false;
+            for (symbol, 0..) |char, i| {
+                if (char == '/') {
+                    // symbol can only contain at most one slash
+                    if (encountered_slash) {
+                        return IterError.SymbolErr;
+                    }
+                    encountered_slash = true;
+                    // found slash at the start but `name` is not empty or slash is at the end
+                    if (i == 0) {
+                        if (symbol.len != 1) {
+                            return IterError.SymbolErr;
+                        }
+                    } else if (i == symbol.len - 1) {
+                        return IterError.SymbolErr;
+                    } else if (!isValidFirstCharacter(symbol[i + 1 ..])) {
+                        // character after slash should also follow first character restrinction
+                        return IterError.SymbolErr;
+                    }
+                }
+            }
         }
         // TODO: continue all tests
         return symbol;
@@ -558,10 +597,25 @@ pub const Iterator = struct {
         return try output.toOwnedSlice();
     }
 
+    fn isValidFirstCharacter(symbol: []const u8) bool {
+        assert(symbol.len != 0);
+        // symbols only start with alphanumberic characters
+        if (ascii.isDigit(symbol[0])) {
+            return false;
+        }
+        // if (!ascii.isAlphanumeric(symbol[0]) and !isSymbolSpecialCharacter(symbol[0])) {
+        //     return false;
+        // }
+        if ((symbol[0] == '.' or symbol[0] == '-' or symbol[0] == '+') and symbol.len != 1) {
+            const second = symbol[1];
+            if (ascii.isDigit(second)) {
+                return false;
+            }
+        }
+        return true;
+    }
     /// check the special character that a symbol can contain other than the alphanumberic
     fn isSymbolSpecialCharacter(c: u21) bool {
-        // TODO: test correctness without casting
-        // const c_ascii = math.cast(u8, c) orelse return false;
         return switch (c) {
             '.', '*', '+', '!', '-', '_', '?', '$', '%', '&', '=', '<', '>' => true,
             else => false,
@@ -576,9 +630,6 @@ pub const Iterator = struct {
         return ascii.isAlphanumeric(c_ascii);
     }
     fn isKeywordTagDelimiter(c: u21) bool {
-        // TODO: test correctness without casting
-        // const c_ascii = math.cast(u8, c) orelse return false;
-        // return c_ascii == ':' or c_ascii == '#';
         return c == ':' or c == '#';
     }
     fn isDelimiter(c: []const u8) bool {
@@ -589,15 +640,6 @@ pub const Iterator = struct {
             '{', '}', '[', ']', '(', ')', '#', '\\', '\"' => true,
             else => false,
         };
-        // return mem.eql(u8, c, "{") or
-        //     mem.eql(u8, c, "}") or
-        //     mem.eql(u8, c, "[") or
-        //     mem.eql(u8, c, "]") or
-        //     mem.eql(u8, c, "(") or
-        //     mem.eql(u8, c, ")") or
-        //     mem.eql(u8, c, "#") or
-        //     mem.eql(u8, c, "\\") or
-        //     mem.eql(u8, c, "\"");
     }
     fn isCommentStart(c: []const u8) bool {
         if (c.len == 0)
@@ -605,12 +647,6 @@ pub const Iterator = struct {
         return c[0] == ';';
     }
     fn isSeparator(c: []const u8) bool {
-        // if (c.len != 1)
-        //     return false;
-        // const ascii_c = c[0];
-        // .{32, 9, 10, 13, control_code.vt, control_code.ff}
-        // 10 0x0a \n, 13 0x0d \r
-        // return ascii.isASCII(ascii_c) and (ascii.isWhitespace(ascii_c) or ascii_c == ',');
         if (c.len == 0)
             return false;
         const c0: u8 = c[0];
@@ -654,6 +690,10 @@ pub const Token = struct {
     tag: Tag,
     literal: ?[]const u8 = null,
 
+    pub fn deinit(self: Token, allocator: mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
     pub fn format(value: Token, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;
