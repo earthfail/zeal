@@ -139,7 +139,7 @@ pub const Iterator = struct {
     const chars = [_][]const u8{ " ", "\t", "\n", "\r" };
 
     const Self = @This();
-    const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, NotFinished };
+    const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, ZeroPrefixNum, NumberErr, InvalidNumber , NotFinished };
 
     // TODO: remove allocator dependence
     pub fn init(allocator: mem.Allocator, str: []const u8) error{InvalidUtf8}!Iterator {
@@ -264,15 +264,16 @@ pub const Iterator = struct {
             },
             else => {
                 const is_digit: bool = digit: {
-                    var iter = self.iter; // copy iterator
-                    const s = iter.nextCodepointSlice();
-                    assert(s != null); // guaranteed by switch first if statement
-                    const c1 = firstCodePoint(s.?);
-                    if (isDigit(c1))
+                    const s = self.iter.peek(2); // Note(Salim): integers can be prefixed with a sign + or -
+                    // so we need to peek two characters ahead
+                    assert(s.len >= 1); // guaranteed by switch
+                    const c1 = s[0];
+                    if(isDigit(c1))
                         break :digit true;
-                    if ('+' == c1 or '-' == c1) {
-                        if (iter.nextCodepointSlice()) |c2| {
-                            if (isDigit(firstCodePoint(c2)))
+                    if('+' == c1 or '-' == c1) {
+                        if(s.len > 1) {
+                            const c2 = s[1]; // if digit then this should be a digit
+                            if(isDigit(c2))
                                 break :digit true;
                         }
                     }
@@ -346,8 +347,8 @@ pub const Iterator = struct {
                 self.iter.i = original_i;
                 return false;
             }
-            while (self.iter.nextCodepointSlice()) |comment| {
-                if (comment[0] == '\n')
+            while (self.iter.nextCodepoint()) |comment| {
+                if (comment == '\n')
                     break;
             }
             return true;
@@ -355,77 +356,87 @@ pub const Iterator = struct {
         self.iter.i = original_i;
         return false;
     }
-
-    pub fn readNumber(self: *Iterator) !Token {
-        var output = ArrayList(u8).init(self.allocator);
-        errdefer output.deinit();
-        try self.readSign(&output);
-        if (self.iter.nextCodepointSlice()) |digit| {
-            const c1 = firstCodePoint(digit);
-            if ('0' == c1) {
-                const digit2 = self.iter.peek(1);
-                if (digit2.len != 0) {
-                    const c2 = firstCodePoint(digit2);
-                    if (isDigit(c2))
-                        return error.zeroPrefixNum;
-                }
+    // not part of the specification but useful predicat.
+    // defined in a way to match clojre.edn/read-string behaviour
+    fn isNumberDelimiter(discriminant: []const u8) bool {
+        return isSeparator(discriminant) or isDelimiter(discriminant) or isCommentStart(discriminant);
+    }
+    pub fn readNumber(self: *Iterator) IterError!Token {
+        const original_i = self.iter.i;
+        _ = self.consumeSign();
+        {
+            // numbers can't begin with 0 unless it is zero
+            const s = self.iter.peek(2);
+            if(s.len == 2 and s[0] == '0' and isDigit(s[1])) {
+                return IterError.ZeroPrefixNum;
             }
-            try output.appendSlice(digit);
         }
-        // read int
-        try self.readDigits(&output);
-        // I will ignore exact precision for floating point number and arbitrary precision for integers
-        const differentiator = self.iter.peek(1);
-        if (differentiator.len != 0) {
-            const c = firstCodePoint(differentiator);
-            switch (c) {
-                'N' => {
-                    try output.appendSlice(self.iter.nextCodepointSlice().?);
-                    if (self.iter.peek(1).len == 0 or isSeparator(self.iter.peek(1))) {
-                        return .{ .literal = try output.toOwnedSlice(), .tag = Tag.integer };
-                    } else return error.InvalidNumber;
-                },
-                'M' => {
-                    try output.appendSlice(self.iter.nextCodepointSlice().?);
-                    if (self.iter.peek(1).len == 0 or isSeparator(self.iter.peek(1))) {
-                        return .{ .literal = try output.toOwnedSlice(), .tag = Tag.float };
-                    } else return error.InvalidNumber;
+        _ = self.consumeDigits();
+        const discriminant = self.iter.peek(1);
+        if(discriminant.len != 0) {
+            switch(discriminant[0]) {
+                inline 'N', 'M' => |disc| {
+                    // 'N' indicates bignumbers
+                    // 'M' indicates exact precisions floating point numbers
+                    if(self.iter.nextCodepoint()) |v| {
+                        assert(v == disc);
+                    } else {
+                        unreachable;
+                    }
+                    const afterDisc = self.iter.peek(1);
+
+                    if(afterDisc.len == 0 or isNumberDelimiter(afterDisc)) {
+                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i],
+                                 .tag = if(disc == 'N') Tag.integer else Tag.float };
+                    }
+                    return IterError.NumberErr;
                 },
                 else => {
-                    if (isSeparator(differentiator) or isDelimiter(differentiator))
-                        return .{ .tag = Tag.integer, .literal = try output.toOwnedSlice() };
-                    var fract = false;
-                    var exp = false;
-                    if ('.' == c) { // fraction part
-                        _ = self.iter.nextCodepointSlice();
-                        try output.appendSlice(differentiator);
-                        try self.readDigits(&output);
-                        fract = true;
+                    // TODO: check if this test can be delay untill the end. meaning after testing fractional
+                    // and exponentional parts at the end of the procedure.
+                    // test for correctness and performance.
+                    // it is mainly here for clarity and because I *believe* most numbers will be integers
+                    if(isNumberDelimiter(discriminant)) {
+                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.integer};
                     }
-                    if (self.iter.peek(1).len == 0) {
-                        return .{ .literal = try output.toOwnedSlice(), .tag = Tag.float };
+                    // section below tests for valid floating point number
+                    var fractional: bool = false;
+                    var exponentional: bool = false;
+                    // numbers can have a fraction part followed by an exponent part
+                    // like 12345789.876543210e10
+                    //      ^~~~~~~~^~~~~~~~~~^~~
+                    //      digits  fraction  exponent
+                    if(discriminant[0] == '.') {
+                        _ = self.iter.nextCodepointSlice(); // consume '.'
+                        _ = self.consumeDigits();
+                        fractional = true;
                     }
-                    const c2 = firstCodePoint(self.iter.peek(1));
-                    if ('e' == c2 or 'E' == c2) {
-                        try output.appendSlice(self.iter.nextCodepointSlice().?);
-                        const d = self.iter.peek(1);
-                        if (d.len != 0) {
-                            const d1 = firstCodePoint(d);
-                            if (isDigit(d1) or '-' == d1 or '+' == d1) {
-                                try self.readSign(&output);
-                                try self.readDigits(&output);
-                                exp = true;
-                            } else return error.InvalidNumber;
+                    const exponent_section = self.iter.peek(1);
+                    if(exponent_section.len != 0) {
+                        if(exponent_section[0] == 'e' or exponent_section[0] == 'E') {
+                            _ = self.iter.nextCodepointSlice() orelse unreachable;
+                            _ = self.consumeSign();
+                            if(self.consumeDigits() == 0) {
+                                return IterError.InvalidNumber;
+                            }
+                            exponentional = true;
                         }
                     }
-                    if (fract or exp) {
-                        if (self.iter.peek(1).len == 0 or isSeparator(self.iter.peek(1)) or isDelimiter(self.iter.peek(1))) {
-                            return .{ .literal = try output.toOwnedSlice(), .tag = Tag.float };
-                        } else return error.InvalidNumber;
-                    } else return error.FloatErr;
+                    if(fractional or exponentional) {
+                        const disc2 = self.iter.peek(1);
+                        if(disc2.len == 0 or isNumberDelimiter(disc2)) {
+                            return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.float};
+                        } else {
+                            return IterError.NumberErr;
+                        }
+                    } else {
+                        return IterError.InvalidNumber;
+                    }
                 },
             }
-        } else return .{ .literal = try output.toOwnedSlice(), .tag = Tag.integer };
+        } else {
+            return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.integer };
+        }
     }
     // character value is the string after \ in the format \3 \u123
     pub fn readCharacterValue(self: *Iterator) ![]const u8 {
@@ -442,7 +453,7 @@ pub const Iterator = struct {
         return self.iter.bytes[start_i..end_i];
     }
 
-    pub fn readString(self: *Iterator) ![]const u8 {
+    pub fn readString(self: *Iterator) IterError![]const u8 {
         const original_i = self.iter.i;
         if (self.iter.nextCodepointSlice()) |c| {
             if (!mem.eql(u8, c, "\"")) {
@@ -464,7 +475,7 @@ pub const Iterator = struct {
         return self.iter.bytes[original_i..end_i];
     }
     // read symbol from iterator and test for correctness but does not test if first character is a tag or keyword delimiter
-    pub fn readSymbolPartialTest(self: *Iterator) ![]const u8 {
+    pub fn readSymbolPartialTest(self: *Iterator) IterError![]const u8 {
         const original_i = self.iter.i;
         var end_i = original_i;
         while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
@@ -665,30 +676,30 @@ pub const Iterator = struct {
         // return code_point.?;
         return unicode.utf8Decode(c) catch unreachable;
     }
-    pub fn readSign(self: *Iterator, output: *ArrayList(u8)) !void {
-        const original_i = self.iter.i;
-        if (self.iter.nextCodepointSlice()) |prefix| {
-            if ('-' == prefix[0]) {
-                try output.appendSlice(prefix);
-            }
-            if ('+' == prefix[0]) {} else {
-                self.iter.i = original_i;
+    // NOTE(Salim): assumes false most of the time
+    // reads character from iterator. Returns true if it is '+' or '-' and advances the self.iter
+    // otherwise, returns false and self.iter is returned to its original position.
+    pub fn consumeSign(self: *Iterator) bool {
+        const c = self.iter.peek(1);
+        if(c.len != 0) {
+            if(c[0] == '-' or c[0] == '+') {
+                _ = self.iter.nextCodepointSlice(); // advances self.iter
+                return true;
             }
         }
+        return false;
     }
-    pub fn readDigits(self: *Iterator, output: *ArrayList(u8)) !void {
-        var original_i = self.iter.i;
-        while (self.iter.nextCodepointSlice()) |digit| : (original_i = self.iter.i) {
-            const code_point = firstCodePoint(digit);
-            if (isDigit(code_point)) {
-                try output.appendSlice(digit);
-            } else {
-                self.iter.i = original_i;
+    // reads digits from self.iter until encountering a non digit
+    pub fn consumeDigits(self: *Iterator) usize {
+        const original_i = self.iter.i;
+        var end_i = original_i;
+        while(self.iter.nextCodepoint()) |digit| : (end_i = self.iter.i) {
+            if(!isDigit(digit)) {
+                self.iter.i = end_i;
                 break;
             }
-        } else {
-            return;
         }
+        return end_i - original_i;
     }
 };
 
