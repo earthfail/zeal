@@ -15,22 +15,14 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 
+// TODO(Salim): Rename Types to match std.json convention
+
 /// debugging function to print what the lexer reads
 pub const LexError = error{ initError, nullError };
 pub fn lexString(s: []const u8) LexError!void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const g_allocator = gpa.allocator();
-    defer {
-        _ = gpa.detectLeaks();
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) expect(false) catch {
-            @panic("gpa leaked");
-        };
-    }
-    // std.debug.print("s={any}, {s}, {any}\n", .{ s.ptr, s, s });
     const stdio = std.io.getStdOut().writer();
 
-    var edn_iter = Iterator.init(g_allocator, s) catch {
+    var edn_iter = Iterator.init(s) catch {
         std.debug.print("iterator failed sorry!\n", .{});
         return LexError.initError;
     };
@@ -71,9 +63,6 @@ test "test symbols" {
         var buffer: [255]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buffer);
         var fbsw = fbs.writer();
-
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
 
         var iterator = try Iterator.init(in);
         var tok = iterator.next();
@@ -130,8 +119,6 @@ test "test characters and strings" {
 /// and self.peek is idempotent
 pub const Iterator = struct {
     iter: unicode.Utf8Iterator,
-    // TODO: remove allocator dependence
-    allocator: mem.Allocator,
     window: ?Token = undefined,
 
     // \<names[i]> is equivalent to \<chars[i]>
@@ -139,31 +126,30 @@ pub const Iterator = struct {
     const chars = [_][]const u8{ " ", "\t", "\n", "\r" };
 
     const Self = @This();
-    const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, ZeroPrefixNum, NumberErr, InvalidNumber , NotFinished };
+    const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, ZeroPrefixNum, NumberErr, InvalidNumber, NotFinished };
 
-    // TODO: remove allocator dependence
-    pub fn init(allocator: mem.Allocator, str: []const u8) error{InvalidUtf8}!Iterator {
+    /// Creates Iterator that consumes str and returns Tokens.
+    /// the lifetime of str should be more than Iterator.
+    pub fn init(str: []const u8) error{InvalidUtf8}!Iterator {
         var view = try unicode.Utf8View.init(str);
-        var self = Iterator{ .iter = view.iterator(), .allocator = allocator };
+        var self = Iterator{ .iter = view.iterator() };
         self.window = self.next2() catch null;
         return self;
-    }
-    pub fn deinit(self: *Iterator) void {
-        _ = self;
-        // self.allocator.destroy(self.window);
     }
     pub fn peek(self: Iterator) ?Token {
         return self.window;
     }
+    /// main procedure to get next token. Benefit over nextError is that it has same signature as peek. Disadvantage is that All errors are turned into null
     pub fn next(self: *Iterator) ?Token {
         return self.nextError() catch null;
     }
-    pub fn nextError(self: *Iterator) !?Token {
+    pub fn nextError(self: *Iterator) IterError!?Token {
         const next_token = try self.next2();
         defer self.window = next_token;
         return self.window;
     }
-    pub fn next2(self: *Iterator) !?Token {
+    /// Helper procedure used to define next and nextError. Made public for more control
+    pub fn next2(self: *Iterator) IterError!?Token {
         // ignore spaces and comments
         while (self.ignoreSeparator() or self.ignoreComment()) {}
 
@@ -212,9 +198,10 @@ pub const Iterator = struct {
 
                 inline for (names, chars) |name, char| {
                     if (mem.eql(u8, character, name)) {
-                        // defer self.allocator.free(character); // unnecessary defer but used for consistency
-                        // const literal = try self.allocator.alloc(u8, 1);
-                        // literal[0] = char;
+                        // Note(Salim): could return character but then the parser needs to
+                        // add another condition. One positive side of returning character instead of char is that
+                        // life time of Token.literal will be the same no matter the tag because now only character
+                        // types have a different lifetime (that of Iterator.chars)
                         return Token{ .tag = Tag.character, .literal = char };
                     }
                 }
@@ -229,14 +216,6 @@ pub const Iterator = struct {
                         return Token{ .tag = Tag.character, .literal = character };
                     }
                 }
-                // DON'T COMMIT: REMOVE this section
-                // const first_char_len = unicode.utf8ByteSequenceLength(character[0]) catch unreachable;
-                // const second_char_len = unicode.utf8ByteSequenceLength(character[first_char_len]);
-                // if (second_char_len) |second_char| {
-                //     const c2 = character[first_char_len .. first_char_len + second_char];
-                //     if (!isSeparator(c2) and !isDelimiter(c2))
-                //         return IterError.InvalidCharacter;
-                // } else |_| {}
                 return Token{ .tag = Tag.character, .literal = character };
             },
             ':' => {
@@ -248,32 +227,23 @@ pub const Iterator = struct {
                 }
                 return Token{ .tag = Tag.keyword, .literal = keyword };
             },
-            // ';' => {
-            //     // TODO: test performance of replacing this block with ignoreComment
-            //     // _ = self.ignoreComment();
-            //     _ = self.iter.nextCodepointSlice();
-            //     while (self.iter.nextCodepointSlice()) |c2| {
-            //         if (mem.eql(u8, c2, "\n"))
-            //             break;
-            //     }
-            //     return self.next2();
-            // },
             '\"' => {
                 const string = try self.readString();
                 return Token{ .tag = Tag.string, .literal = string };
             },
             else => {
                 const is_digit: bool = digit: {
-                    const s = self.iter.peek(2); // Note(Salim): integers can be prefixed with a sign + or -
+                    const s = self.iter.peek(2);
+                    // Note(Salim): integers can be prefixed with a sign + or -
                     // so we need to peek two characters ahead
                     assert(s.len >= 1); // guaranteed by switch
                     const c1 = s[0];
-                    if(isDigit(c1))
+                    if (isDigit(c1))
                         break :digit true;
-                    if('+' == c1 or '-' == c1) {
-                        if(s.len > 1) {
+                    if ('+' == c1 or '-' == c1) {
+                        if (s.len > 1) {
                             const c2 = s[1]; // if digit then this should be a digit
-                            if(isDigit(c2))
+                            if (isDigit(c2))
                                 break :digit true;
                         }
                     }
@@ -293,7 +263,8 @@ pub const Iterator = struct {
 
         return null;
     }
-    // read separators until reaching a non-whitespace and not ',' character. Returns true if read something, false otherwise.
+    /// reads separators until reaching a non-whitespace and not ',' character.
+    /// Returns true if read something, false otherwise.
     pub fn ignoreSeparator(self: *Iterator) bool {
         var original_i = self.iter.i;
         if (self.iter.nextCodepointSlice()) |c| {
@@ -312,32 +283,6 @@ pub const Iterator = struct {
             }
         }
         return true;
-        // if(false) {
-        //     var read = false;
-        //     var original_i = self.iter.i;
-        //     while (self.iter.nextCodepointSlice()) |c| : (original_i = self.iter.i) {
-        //         if (isSeparator(c)) {
-        //             read = true;
-        //             continue;
-        //         } else {
-        //             self.iter.i = original_i;
-        //             return read;
-        //         }
-        //     } else {
-        //         self.iter.i = original_i;
-        //         return read;
-        //     }
-        // }
-        // while (self.iter.peek(1)) |c| : (_ = self.iter.nextSlice()) {
-        //     if (isSeparator(c)) {
-        //         continue;
-        //     } else if (mem.eql(u8, c, ";")) {
-        //         while (self.iter.nextSlice()) |comment| {
-        //             if (mem.eql(u8, comment, "\n"))
-        //                 break;
-        //         }
-        //     } else break;
-        // }
     }
     /// read comment from iterator, return true of encountered comment, false otherwise
     pub fn ignoreComment(self: *Iterator) bool {
@@ -356,9 +301,9 @@ pub const Iterator = struct {
         self.iter.i = original_i;
         return false;
     }
-    // not part of the specification but useful predicat.
-    // defined in a way to match clojre.edn/read-string behaviour
-    fn isNumberDelimiter(discriminant: []const u8) bool {
+    /// not part of the specification but useful predicat.
+    /// defined in a way to match clojre.edn/read-string behaviour
+    pub fn isTokenDelimiter(discriminant: []const u8) bool {
         return isSeparator(discriminant) or isDelimiter(discriminant) or isCommentStart(discriminant);
     }
     pub fn readNumber(self: *Iterator) IterError!Token {
@@ -367,27 +312,26 @@ pub const Iterator = struct {
         {
             // numbers can't begin with 0 unless it is zero
             const s = self.iter.peek(2);
-            if(s.len == 2 and s[0] == '0' and isDigit(s[1])) {
+            if (s.len == 2 and s[0] == '0' and isDigit(s[1])) {
                 return IterError.ZeroPrefixNum;
             }
         }
         _ = self.consumeDigits();
         const discriminant = self.iter.peek(1);
-        if(discriminant.len != 0) {
-            switch(discriminant[0]) {
+        if (discriminant.len != 0) {
+            switch (discriminant[0]) {
                 inline 'N', 'M' => |disc| {
                     // 'N' indicates bignumbers
                     // 'M' indicates exact precisions floating point numbers
-                    if(self.iter.nextCodepoint()) |v| {
+                    if (self.iter.nextCodepoint()) |v| {
                         assert(v == disc);
                     } else {
                         unreachable;
                     }
                     const afterDisc = self.iter.peek(1);
 
-                    if(afterDisc.len == 0 or isNumberDelimiter(afterDisc)) {
-                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i],
-                                 .tag = if(disc == 'N') Tag.integer else Tag.float };
+                    if (afterDisc.len == 0 or isTokenDelimiter(afterDisc)) {
+                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = if (disc == 'N') Tag.integer else Tag.float };
                     }
                     return IterError.NumberErr;
                 },
@@ -396,8 +340,8 @@ pub const Iterator = struct {
                     // and exponentional parts at the end of the procedure.
                     // test for correctness and performance.
                     // it is mainly here for clarity and because I *believe* most numbers will be integers
-                    if(isNumberDelimiter(discriminant)) {
-                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.integer};
+                    if (isTokenDelimiter(discriminant)) {
+                        return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.integer };
                     }
                     // section below tests for valid floating point number
                     var fractional: bool = false;
@@ -406,26 +350,26 @@ pub const Iterator = struct {
                     // like 12345789.876543210e10
                     //      ^~~~~~~~^~~~~~~~~~^~~
                     //      digits  fraction  exponent
-                    if(discriminant[0] == '.') {
+                    if (discriminant[0] == '.') {
                         _ = self.iter.nextCodepointSlice(); // consume '.'
                         _ = self.consumeDigits();
                         fractional = true;
                     }
                     const exponent_section = self.iter.peek(1);
-                    if(exponent_section.len != 0) {
-                        if(exponent_section[0] == 'e' or exponent_section[0] == 'E') {
+                    if (exponent_section.len != 0) {
+                        if (exponent_section[0] == 'e' or exponent_section[0] == 'E') {
                             _ = self.iter.nextCodepointSlice() orelse unreachable;
                             _ = self.consumeSign();
-                            if(self.consumeDigits() == 0) {
+                            if (self.consumeDigits() == 0) {
                                 return IterError.InvalidNumber;
                             }
                             exponentional = true;
                         }
                     }
-                    if(fractional or exponentional) {
+                    if (fractional or exponentional) {
                         const disc2 = self.iter.peek(1);
-                        if(disc2.len == 0 or isNumberDelimiter(disc2)) {
-                            return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.float};
+                        if (disc2.len == 0 or isTokenDelimiter(disc2)) {
+                            return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.float };
                         } else {
                             return IterError.NumberErr;
                         }
@@ -438,7 +382,7 @@ pub const Iterator = struct {
             return Token{ .literal = self.iter.bytes[original_i..self.iter.i], .tag = Tag.integer };
         }
     }
-    // character value is the string after \ in the format \3 \u123
+    /// character value is the string after \ in the format \3 or \u123
     pub fn readCharacterValue(self: *Iterator) ![]const u8 {
         const start_i = self.iter.i;
         _ = self.iter.nextCodepointSlice() orelse return error.NoFirstCharacter;
@@ -474,12 +418,12 @@ pub const Iterator = struct {
 
         return self.iter.bytes[original_i..end_i];
     }
-    // read symbol from iterator and test for correctness but does not test if first character is a tag or keyword delimiter
-    pub fn readSymbolPartialTest(self: *Iterator) IterError![]const u8 {
+    /// read symbol from iterator and test for correctness but does not test if first character is a tag or keyword delimiter
+    fn readSymbolPartialTest(self: *Iterator) IterError![]const u8 {
         const original_i = self.iter.i;
         var end_i = original_i;
         while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
-            if (isSeparator(c) or isCommentStart(c) or isDelimiter(c)) {
+            if (isTokenDelimiter(c)) {
                 self.iter.i = end_i;
                 break;
             }
@@ -488,130 +432,32 @@ pub const Iterator = struct {
         if (symbol.len == 0) {
             return IterError.SymbolErr;
         }
-        // symbols also don't start with ':' or '#', those are reserved for keywords and tags
-        // TODO: move keyword tag check outwards
-        //  or isKeywordTagDelimiter(symbol[0])
         if (!isValidFirstCharacter(symbol)) {
             return IterError.SymbolErr;
         }
-        {
-            // search for '/' and check if either both prefix and name are empty or not empty
-            var encountered_slash = false;
-            for (symbol, 0..) |char, i| {
-                if (char == '/') {
-                    // symbol can only contain at most one slash
-                    if (encountered_slash) {
-                        return IterError.SymbolErr;
-                    }
-                    encountered_slash = true;
-                    // found slash at the start but `name` is not empty or slash is at the end
-                    if (i == 0) {
-                        if (symbol.len != 1) {
-                            return IterError.SymbolErr;
-                        }
-                    } else if (i == symbol.len - 1) {
-                        return IterError.SymbolErr;
-                    } else if (!isValidFirstCharacter(symbol[i + 1 ..])) {
-                        // character after slash should also follow first character restrinction
-                        return IterError.SymbolErr;
-                    }
-                }
-            }
-        }
-        // TODO: continue all tests
-        return symbol;
-    }
-
-    /// I could also read whole symbol then validate it. Maybe I will try it in another function.
-    /// But the iterface for parsing it cumbersome so I erred on the side of caution
-    /// or I could copy the iterator to simplified validation. In later commits WTWOG (with the will of God)
-    pub fn readSymbol_old(self: *Iterator) ![]const u8 {
-        var output = std.ArrayList(u8).init(self.allocator);
+        // search for '/' and check if either both prefix and name are empty or not empty
         var encountered_slash = false;
-        var empty_prefix = false;
-        errdefer output.deinit();
-
-        if (self.iter.nextCodepointSlice()) |first| {
-            if (isSeparator(first)) {
-                return IterError.SymbolErr;
-            }
-            const firstu21 = unicode.utf8Decode(first) catch unreachable;
-            if (isDigit(firstu21))
-                return IterError.SymbolErr;
-            if (!isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21) and !('/' == firstu21))
-                return IterError.SymbolErr;
-            if ('/' == firstu21) {
-                empty_prefix = true;
+        for (symbol, 0..) |char, i| {
+            if (char == '/') {
+                // symbol can only contain at most one slash
+                if (encountered_slash) {
+                    return IterError.SymbolErr;
+                }
                 encountered_slash = true;
-            }
-            try output.appendSlice(first);
-            if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
-                const second = self.iter.peek(1);
-                if (second.len == 0) {
-                    if (isDigit(unicode.utf8Decode(second) catch unreachable))
+                // found slash at the start but `name` is not empty or slash is at the end
+                if (i == 0) {
+                    if (symbol.len != 1) {
                         return IterError.SymbolErr;
-                } else return try output.toOwnedSlice();
-            }
-        } else unreachable; // guaranteed by the next2 function
-
-        // check empty prefix and not empty name
-        {
-            const c = self.iter.peek(1);
-            if (c.len != 0) {
-                if (!isSeparator(c)) {
-                    if (empty_prefix and encountered_slash)
-                        return error.SymbolEmptyPrefix;
+                    }
+                } else if (i == symbol.len - 1) {
+                    return IterError.SymbolErr;
+                } else if (!isValidFirstCharacter(symbol[i + 1 ..])) {
+                    // character after slash should also follow first character restrinction
+                    return IterError.SymbolErr;
                 }
             }
         }
-        var original_i = self.iter.i;
-        errdefer self.iter.i = original_i;
-
-        while (self.iter.nextCodepointSlice()) |c| : (original_i = self.iter.i) {
-            const cu21 = unicode.utf8Decode(c) catch unreachable;
-            if (isAlphaNum(cu21) or isSymbolSpecialCharacter(cu21) or isKeywordTagDelimiter(cu21)) {
-                // _ = self.iter.nextCodepointSlice(); // consume c
-                try output.appendSlice(c);
-                continue;
-            } else if ('/' == cu21) {
-                if (encountered_slash)
-                    return IterError.SymbolErr;
-                encountered_slash = true;
-
-                // _ = self.iter.nextCodepointSlice(); // consume /
-                try output.appendSlice(c); // "/" == c
-                // check first character of name
-                if (self.iter.nextCodepointSlice()) |first| {
-                    if (isSeparator(first))
-                        return IterError.SymbolErr; // name should not be empty
-
-                    const firstu21 = unicode.utf8Decode(first) catch unreachable;
-                    if (isDigit(firstu21))
-                        return IterError.SymbolErr;
-                    if (!isAlphaNum(firstu21) and !isSymbolSpecialCharacter(firstu21))
-                        return IterError.SymbolErr;
-
-                    try output.appendSlice(first);
-                    if (mem.eql(u8, first, ".") or mem.eql(u8, first, "-") or mem.eql(u8, first, "+")) {
-                        const second = self.iter.peek(1);
-                        if (second.len != 0) {
-                            if (isDigit(unicode.utf8Decode(second) catch unreachable))
-                                return IterError.SymbolErr;
-                        } else {
-                            assert(!empty_prefix); // guarantees that it is a valid symbol
-                            return try output.toOwnedSlice();
-                        }
-                    }
-                } else return error.SymbolEmptyName; // name should not be empty
-            } else {
-                // here c is not # or :
-                if (isSeparator(c) or isDelimiter(c) or isCommentStart(c)) {
-                    self.iter.i = original_i;
-                    break;
-                } else return IterError.SymbolErr;
-            }
-        }
-        return try output.toOwnedSlice();
+        return symbol;
     }
 
     fn isValidFirstCharacter(symbol: []const u8) bool {
@@ -677,24 +523,24 @@ pub const Iterator = struct {
         return unicode.utf8Decode(c) catch unreachable;
     }
     // NOTE(Salim): assumes false most of the time
-    // reads character from iterator. Returns true if it is '+' or '-' and advances the self.iter
-    // otherwise, returns false and self.iter is returned to its original position.
-    pub fn consumeSign(self: *Iterator) bool {
+    /// reads character from iterator. Returns true if it is '+' or '-' and advances the self.iter
+    /// otherwise, returns false and self.iter is returned to its original position.
+    fn consumeSign(self: *Iterator) bool {
         const c = self.iter.peek(1);
-        if(c.len != 0) {
-            if(c[0] == '-' or c[0] == '+') {
+        if (c.len != 0) {
+            if (c[0] == '-' or c[0] == '+') {
                 _ = self.iter.nextCodepointSlice(); // advances self.iter
                 return true;
             }
         }
         return false;
     }
-    // reads digits from self.iter until encountering a non digit
-    pub fn consumeDigits(self: *Iterator) usize {
+    /// reads digits from self.iter until encountering a non digit
+    fn consumeDigits(self: *Iterator) usize {
         const original_i = self.iter.i;
         var end_i = original_i;
-        while(self.iter.nextCodepoint()) |digit| : (end_i = self.iter.i) {
-            if(!isDigit(digit)) {
+        while (self.iter.nextCodepoint()) |digit| : (end_i = self.iter.i) {
+            if (!isDigit(digit)) {
                 self.iter.i = end_i;
                 break;
             }
@@ -702,15 +548,27 @@ pub const Iterator = struct {
         return end_i - original_i;
     }
 };
-
+pub const Tag = enum {
+    @"{",
+    @"}",
+    @"(",
+    @")",
+    @"[",
+    @"]",
+    @"#{",
+    @"#_",
+    tag,
+    string,
+    character,
+    symbol,
+    keyword,
+    integer,
+    float,
+};
 pub const Token = struct {
     tag: Tag,
     literal: ?[]const u8 = null,
 
-    pub fn deinit(self: Token, allocator: mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
     pub fn format(value: Token, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;
@@ -779,21 +637,4 @@ pub const Token = struct {
         }
         return;
     }
-};
-pub const Tag = enum {
-    @"{",
-    @"}",
-    @"(",
-    @")",
-    @"[",
-    @"]",
-    @"#{",
-    @"#_",
-    tag,
-    string,
-    character,
-    symbol,
-    keyword,
-    integer,
-    float,
 };
