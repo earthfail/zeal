@@ -46,36 +46,39 @@ pub fn lexString(s: []const u8) LexError!void {
 // TODO(Salim): add tests for number, keywords, characters, strings, symbols, tags
 //              and combinations thereof
 
-test "test symbols" {
-    const inputs = [_][]const u8{
-        "é",
-        \\a/khatib / finé
-        ,
-        \\salim
-        ,
+test "test symbols isolated" {
+    const Input = struct {
+        string: []const u8,
+        expectation: Token,
     };
-    const expectations = [_][]const u8{
-        "é ",
-        \\a/khatib / finé
-        ,
+    const inputs = [_]Input{
+        .{ .string = "é", .expectation = Token{ .literal = "é", .tag = .symbol } },
+        .{ .string = "a/khatib", .expectation = Token{ .literal = "a/khatib", .tag = .symbol } },
+        .{ .string = "/", .expectation = Token{ .literal = "/", .tag = .symbol } },
+        .{ .string = "finé", .expectation = Token{ .literal = "finé", .tag = .symbol } },
+        .{ .string = 
         \\salim
-        ,
+        , .expectation = Token{ .literal = "salim", .tag = .symbol } },
     };
-    for (inputs, expectations) |in, exp| {
-        var buffer: [255]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buffer);
-        var fbsw = fbs.writer();
 
-        var iterator = try Iterator.init(in);
-        var tok = iterator.next();
-        while (tok) |token| : (tok = iterator.next()) {
-            try fbsw.print("{s} ", .{token});
+    for (inputs) |input| {
+        var iterator = try Iterator.init(input.string);
+        if (iterator.nextError()) |t| {
+            if (t) |token| {
+                testing.expectEqual(token, input.expectation) catch |err| {
+                    std.debug.print("   different output when reading \"{s}\"\n", .{input.string});
+                    std.debug.print("   got {any}\n", .{token});
+                    return err;
+                };
+                try testing.expect(iterator.next() == null);
+            } else {
+                std.debug.print("    got null token while reading \"{s}\"\n", .{input.string});
+                try testing.expect(false);
+            }
+        } else |err| {
+            std.debug.print("    failed scanning {} while reading \"{s}\"\n", .{ err, input.string });
+            return err;
         }
-        testing.expect(mem.eql(u8, fbs.getWritten(), exp)) catch {
-            std.debug.print("****************************************************************output didn't mean the expectations\n", .{});
-            std.debug.print("output: {s}\n", .{fbs.getWritten()});
-            std.debug.print("expect: {s}\n", .{exp});
-        };
     }
 }
 test "test characters and strings" {
