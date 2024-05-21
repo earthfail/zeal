@@ -43,6 +43,8 @@ pub fn lexString(s: []const u8) LexError!void {
         };
     }
 }
+// TODO(Salim): add tests for number, keywords, characters, strings, symbols, tags
+//              and combinations thereof
 
 test "test symbols" {
     const inputs = [_][]const u8{
@@ -111,7 +113,72 @@ test "test characters and strings" {
         };
     }
 }
+test "integers and floats isolated" {
+    // test if iterator determines the tag correctly for each number tag
+    {
+        const Input = struct {
+            string: []const u8,
+            tag: Tag,
+        };
+        const successful_arr = [_]Input{
+            .{ .string = "123", .tag = .integer },
+            .{ .string = "0", .tag = .integer },
+            .{ .string = "+11111111111111111111111111111111111111111", .tag = .integer },
+            .{ .string = "123109328N", .tag = .integer },
+            .{ .string = "0.1", .tag = .float },
+            .{ .string = "1230819.e10", .tag = .float },
+            .{ .string = "123000819.", .tag = .float },
+            .{ .string = "-1209384239408M", .tag = .float },
+            .{ .string = "+213098.21039812039e10", .tag = .float },
+        };
+        for (successful_arr) |input| {
+            var iterator = try Iterator.init(input.string);
+            if (iterator.nextError()) |t| {
+                if (t) |token| {
+                    try testing.expectEqualStrings(input.string, token.literal.?);
+                    try testing.expectEqual(input.tag, token.tag);
 
+                    try testing.expect(iterator.next() == null);
+                } else {
+                    std.debug.print("    got null token while reading \"{s}\"\n", .{input.string});
+                    try testing.expect(false);
+                }
+            } else |err| {
+                std.debug.print("    failed scanning {} while reading \"{s}\"\n", .{ err, input.string });
+                return err;
+            }
+        }
+    }
+    {
+        const Input = struct {
+            string: []const u8,
+            result: Iterator.IterError,
+        };
+        const failiure_arr = [_]Input{
+            .{ .string = "-0123", .result = error.ZeroPrefixNum },
+            .{ .string = "12312Z", .result = error.NumberErr },
+            .{ .string = "1020.123e+A", .result = error.InvalidNumber },
+        };
+        for (failiure_arr) |input| {
+            var iterator = try Iterator.init(input.string);
+
+            if (iterator.nextError()) |t| {
+                if (t) |token| {
+                    std.debug.print("    expected error found {any}\n", .{token});
+                    try testing.expect(false);
+                } else {
+                    std.debug.print("    got null while reading {s}\n", .{input.string});
+                    try testing.expect(false);
+                }
+            } else |err| {
+                testing.expectEqual(err, input.result) catch |e| {
+                    std.debug.print("error mismatch while reading {s}\n", .{input.string});
+                    return e;
+                };
+            }
+        }
+    }
+}
 /// iterator has two main functions next,peek with the following properties:
 /// const c1 = self.peek();
 /// const c2 = self.next();
@@ -119,32 +186,36 @@ test "test characters and strings" {
 /// and self.peek is idempotent
 pub const Iterator = struct {
     iter: unicode.Utf8Iterator,
-    window: ?Token = undefined,
+    window: IterError!?Token = undefined,
 
     // \<names[i]> is equivalent to \<chars[i]>
     const names = [_][]const u8{ "space", "tab", "newline", "return" };
     const chars = [_][]const u8{ " ", "\t", "\n", "\r" };
 
     const Self = @This();
-    const IterError = error{ CharacterNull, InvalidCharacter, StringErr, SymbolErr, CharacterErr, PoundErr, KeywordErr, ZeroPrefixNum, NumberErr, InvalidNumber, NotFinished };
+    // TODO(Salim): check if the description below is correct
+    /// errors with the suffix Err like NumberErr are error the occur because text around the token. errors with the prefix Invalid occur if there is a problem with the token itself.
+    const IterError = error{ CharacterNull, InvalidCharacter, NoFirstCharacter, StringErr, InvalidString, SymbolErr, CharacterErr, PoundErr, KeywordErr, ZeroPrefixNum, NumberErr, InvalidNumber };
 
     /// Creates Iterator that consumes str and returns Tokens.
     /// the lifetime of str should be more than Iterator.
     pub fn init(str: []const u8) error{InvalidUtf8}!Iterator {
         var view = try unicode.Utf8View.init(str);
         var self = Iterator{ .iter = view.iterator() };
-        self.window = self.next2() catch null;
+        self.window = self.next2();
         return self;
     }
     pub fn peek(self: Iterator) ?Token {
-        return self.window;
+        return self.window catch null;
     }
-    /// main procedure to get next token. Benefit over nextError is that it has same signature as peek. Disadvantage is that All errors are turned into null
+    /// main procedure to get next token. Benefit over nextError is that it has same signature as peek and is independent of the token ahead i.e it will not throw error if the token after next if invalid. Disadvantage is that All errors are turned into null
     pub fn next(self: *Iterator) ?Token {
         return self.nextError() catch null;
     }
+    /// scans iterator and returns next token in the stream. If there is an error, returns that error.
+    /// Note: self.iter will be not be the same as before the call. Could be useful to skip invalid token.
     pub fn nextError(self: *Iterator) IterError!?Token {
-        const next_token = try self.next2();
+        const next_token = self.next2();
         defer self.window = next_token;
         return self.window;
     }
@@ -374,7 +445,7 @@ pub const Iterator = struct {
                             return IterError.NumberErr;
                         }
                     } else {
-                        return IterError.InvalidNumber;
+                        return IterError.NumberErr;
                     }
                 },
             }
@@ -383,9 +454,9 @@ pub const Iterator = struct {
         }
     }
     /// character value is the string after \ in the format \3 or \u123
-    pub fn readCharacterValue(self: *Iterator) ![]const u8 {
+    pub fn readCharacterValue(self: *Iterator) IterError![]const u8 {
         const start_i = self.iter.i;
-        _ = self.iter.nextCodepointSlice() orelse return error.NoFirstCharacter;
+        _ = self.iter.nextCodepointSlice() orelse return IterError.NoFirstCharacter;
 
         var end_i = self.iter.i;
         while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
@@ -411,9 +482,9 @@ pub const Iterator = struct {
                 break;
             if (mem.eql(u8, c, "\\")) {
                 // there must be a character after \
-                _ = self.iter.nextCodepointSlice() orelse return IterError.StringErr;
+                _ = self.iter.nextCodepointSlice() orelse return IterError.InvalidString;
             }
-        } else return IterError.StringErr;
+        } else return IterError.InvalidString;
         const end_i = self.iter.i;
 
         return self.iter.bytes[original_i..end_i];
