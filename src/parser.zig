@@ -16,22 +16,23 @@ fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !big.int.Managed
 
 pub const EdnReader = struct {
     iter: lexer.Iterator,
+    allocator: mem.Allocator,
     data_readers: ?std.StringHashMap(TagHandler) = null,
 
     pub fn init(allocator: mem.Allocator, buffer: []const u8) !EdnReader {
-        const iter = try lexer.Iterator.init(allocator, buffer);
+        const iter = try lexer.Iterator.init(buffer);
         return .{
             .iter = iter,
+            .allocator = allocator,
         };
     }
     pub fn deinit(self: *EdnReader) void {
-        self.iter.deinit();
         if (self.data_readers) |*readers| {
             readers.deinit();
         }
     }
     pub fn readEdn(self: *EdnReader) !*Edn {
-        var allocator = self.iter.allocator;
+        var allocator = self.allocator;
         var iter = &self.iter;
         if (iter.next()) |token| {
             switch (token.tag) {
@@ -70,7 +71,7 @@ pub const EdnReader = struct {
                 },
                 .integer => {
                     const literal = token.literal.?;
-                    defer token.deinit(iter.allocator);
+                    // defer token.deinit(iter.allocator);
                     const value = try allocator.create(Edn);
                     errdefer allocator.destroy(value);
 
@@ -288,7 +289,6 @@ pub const EdnReader = struct {
 pub const Edn = union(enum) {
     nil: Nil,
     boolean: bool,
-    // string: [:0]const u8,
     string: []const u8,
     character: Character,
 
@@ -305,10 +305,10 @@ pub const Edn = union(enum) {
     hashset: Hashset,
     tag: Tag,
     pub const Character = u21;
-    pub const List = std.ArrayList(*Edn);
-    pub const Vector = std.ArrayList(*Edn);
-    pub const Hashmap = std.AutoArrayHashMap(*Edn, *Edn);
-    pub const Hashset = std.AutoArrayHashMap(*Edn, void);
+    pub const List = std.ArrayListUnmanaged(*Edn);
+    pub const Vector = std.ArrayListUnmanaged(*Edn);
+    pub const Hashmap = std.AutoArrayHashMapUnmanaged(*Edn, *Edn);
+    pub const Hashset = std.AutoArrayHashMapUnmanaged(*Edn, void);
 
     const Nil = enum { nil };
     pub var nil = Edn{ .nil = Nil.nil };
