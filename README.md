@@ -5,7 +5,9 @@ with faster parsing than standard `clojure.edn/read`[^2]
 # Status
 This is alpha software so expect bugs.
 ## TODO
-- remove unnecessary allocator in lexer.zig
+- understand json.Scanner to improve performance. Currently scanner
+  takes 1ms and edn lexer takes 6ms (about the same time as
+  json.parser X_X)
 - decrease allocations.
 
 ## Usage
