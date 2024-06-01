@@ -123,7 +123,6 @@ pub fn benchmark_main() !void {
     // var t = try std.time.Timer.start();
     tracy.setThreadName("edn");
     defer tracy.message("edn thread exit");
-    
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -153,7 +152,7 @@ pub fn benchmark_main() !void {
     // std.debug.print("input is '{s}'\n", .{input});
 
     const stdout = std.io.getStdOut().writer();
-    var edn_reader = try EdnReader.init(allocator, input);
+    var edn_reader = try EdnReader.init(allocator, allocator, input);
     // reader.data_readers = std.StringHashMap(parser.TagHandler).init(g_allocator);
     // try reader.data_readers.?.put("inst", edn_to_inst);
     defer edn_reader.deinit();

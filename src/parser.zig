@@ -8,22 +8,27 @@ const assert = std.debug.assert;
 
 const lexer = @import("lexer.zig");
 
-fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !big.int.Managed {
+fn readBigInteger(allocator: mem.Allocator, buffer: []const u8) !Edn.BigInt {
     var v = try big.int.Managed.init(allocator);
     try v.setString(10, buffer);
-    return v;
+    return v.toConst();
 }
 
 pub const EdnReader = struct {
     iter: lexer.Iterator,
     allocator: mem.Allocator,
+    ephemeral_allocator: mem.Allocator,
     data_readers: ?std.StringHashMap(TagHandler) = null,
 
-    pub fn init(allocator: mem.Allocator, buffer: []const u8) !EdnReader {
+    // TODO(Salim): add ErrorEdn to procedures that return errors after finding all the errors
+    const ErrorEdn = mem.Allocator.Error;
+
+    pub fn init(ephemeral_allocator: mem.Allocator, allocator: mem.Allocator, buffer: []const u8) !EdnReader {
         const iter = try lexer.Iterator.init(buffer);
         return .{
             .iter = iter,
             .allocator = allocator,
+            .ephemeral_allocator = ephemeral_allocator,
         };
     }
     pub fn deinit(self: *EdnReader) void {
@@ -31,66 +36,75 @@ pub const EdnReader = struct {
             readers.deinit();
         }
     }
-    pub fn readEdn(self: *EdnReader) !*Edn {
+    // TODO(Salim): write all possible errors in set
+    pub fn readEdn(self: *EdnReader) !Edn {
         var allocator = self.allocator;
         var iter = &self.iter;
         if (iter.next()) |token| {
             switch (token.tag) {
                 .symbol => {
                     if (mem.eql(u8, "true", token.literal.?)) {
-                        allocator.free(token.literal.?);
-                        return &Edn.true;
+                        // allocator.free(token.literal.?);
+                        return Edn.true;
                     } else if (mem.eql(u8, "false", token.literal.?)) {
-                        allocator.free(token.literal.?);
-                        return &Edn.false;
+                        // allocator.free(token.literal.?);
+                        return Edn.false;
                     } else if (mem.eql(u8, "nil", token.literal.?)) {
-                        allocator.free(token.literal.?);
-                        return &Edn.nil;
+                        // allocator.free(token.literal.?);
+                        return Edn.nil;
                     } else {
-                        const value = try allocator.create(Edn);
-                        value.* = .{ .symbol = token.literal.? };
+                        // const value = try allocator.create(Edn);
+                        // value.* = Edn{ .symbol = try allocator.dupe(u8, token.literal.?) };
+                        const value = Edn{ .symbol = try allocator.dupe(u8, token.literal.?) };
                         return value;
                     }
                 },
                 .keyword => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .keyword = token.literal.? };
+                    // const value = try allocator.create(Edn);
+                    // value.* = Edn{ .keyword = try allocator.dupe(u8, token.literal.?) };
+                    const value = Edn{ .keyword = try allocator.dupe(u8, token.literal.?) };
                     return value;
                 },
                 .string => {
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .string = token.literal.? };
+                    // const value = try allocator.create(Edn);
+                    // value.* = Edn{ .string = token.literal.? };
+                    const value = Edn{ .string = try canonicalString(allocator, token.literal.?) };
                     return value;
                 },
                 .character => {
-                    const c = lexer.Iterator.firstCodePoint(token.literal.?);
-                    allocator.free(token.literal.?);
-                    const value = try allocator.create(Edn);
-                    value.* = .{ .character = c };
+                    // const c = lexer.Iterator.firstCodePoint(token.literal.?);
+                    // allocator.free(token.literal.?);
+                    // const value = try allocator.create(Edn);
+                    // value.* = .{ .character = c };
+                    const value = Edn{ .character = canonicalCharacter(token.literal.?) };
                     return value;
                 },
                 .integer => {
                     const literal = token.literal.?;
                     // defer token.deinit(iter.allocator);
-                    const value = try allocator.create(Edn);
-                    errdefer allocator.destroy(value);
+                    // const value = try allocator.create(Edn);
+                    // errdefer allocator.destroy(value);
+                    var value: Edn = undefined;
 
                     if (literal[literal.len - 1] == 'N') {
-                        value.* = .{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
+                        // value.* = .{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
+                        value = Edn{ .bigInteger = try readBigInteger(allocator, literal[0 .. literal.len - 1]) };
                         return value;
                     } else {
                         if (std.fmt.parseInt(i64, literal, 10)) |int| {
-                            value.* = .{ .integer = int };
+                            // value.* = .{ .integer = int };
+                            value = Edn{ .integer = int };
                             return value;
                         } else |_| {
-                            value.* = .{ .bigInteger = try readBigInteger(allocator, literal) };
+                            // value.* = .{ .bigInteger = try readBigInteger(allocator, literal) };
+                            value = Edn{ .bigInteger = try readBigInteger(allocator, literal) };
                             return value;
                         }
                     }
                 },
                 .float => {
                     const literal = token.literal.?;
-                    defer token.deinit(iter.allocator);
+                    // defer token.deinit(iter.allocator);
                     const value = try allocator.create(Edn);
                     errdefer allocator.destroy(value);
 
@@ -284,10 +298,43 @@ pub const EdnReader = struct {
         }
         return error.@"edn is an extensible data format";
     }
+    // TODO(Salim): Think about using simd to increase performance.
+    /// create a string from `general_string` with "\n" replaced with \n and "\t" replaced with \t
+    /// "\r" replaced with \r and  and "\"" with " and "\\" replaced with \
+    fn canonicalString(allocator: mem.Allocator, general_string: []const u8) ![]const u8 {
+        var canonical_string = try std.ArrayList(u8).initCapacity(allocator, general_string.len);
+
+        var i: usize = 0;
+        while (i < general_string.len) {
+            if (general_string[i] == '\\') {
+                // if lexer worked correctly, then this should not fire up
+                assert(i != general_string.len - 1);
+                const next_char = general_string[i + 1];
+                switch (next_char) {
+                    'n' => canonical_string.appendAssumeCapacity('\n'),
+                    't' => canonical_string.appendAssumeCapacity('\t'),
+                    'r' => canonical_string.appendAssumeCapacity('\r'),
+                    '\"' => canonical_string.appendAssumeCapacity('\"'),
+                    '\\' => canonical_string.appendAssumeCapacity('\\'),
+                    else => return error.UnknownEscape,
+                }
+                i += 2;
+            } else {
+                try canonical_string.append(general_string[i]);
+                i += 1;
+            }
+        }
+        return canonical_string.toOwnedSlice();
+    }
+    // TODO(Salim): return the correct character from token.literal
+    fn canonicalCharacter(general_character: []const u8) Edn.Character {
+        return general_character[0];
+    }
 };
+
 // I decided to keep keyword and symbol simple and we can compute each part (prefix,name) on demand.
 pub const Edn = union(enum) {
-    nil: Nil,
+    nil,
     boolean: bool,
     string: []const u8,
     character: Character,
@@ -296,7 +343,7 @@ pub const Edn = union(enum) {
     keyword: Keyword,
 
     integer: i64,
-    bigInteger: std.math.big.int.Managed,
+    bigInteger: BigInt,
     float: f64,
     bigFloat: std.math.big.Rational,
     list: List,
@@ -304,16 +351,17 @@ pub const Edn = union(enum) {
     hashmap: Hashmap,
     hashset: Hashset,
     tag: Tag,
+
     pub const Character = u21;
     pub const List = std.ArrayListUnmanaged(*Edn);
     pub const Vector = std.ArrayListUnmanaged(*Edn);
     pub const Hashmap = std.AutoArrayHashMapUnmanaged(*Edn, *Edn);
     pub const Hashset = std.AutoArrayHashMapUnmanaged(*Edn, void);
+    pub const BigInt = std.math.big.int.Const;
 
-    const Nil = enum { nil };
-    pub var nil = Edn{ .nil = Nil.nil };
-    pub var @"true" = Edn{ .boolean = true };
-    pub var @"false" = Edn{ .boolean = false };
+    pub const nil = Edn{ .nil = {} };
+    pub const @"true" = Edn{ .boolean = true };
+    pub const @"false" = Edn{ .boolean = false };
 
     pub fn deinit(self: *Edn, allocator: mem.Allocator) void {
         switch (self.*) {
