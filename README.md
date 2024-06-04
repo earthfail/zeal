@@ -64,7 +64,7 @@ const parser = zeal.parser;
 const EdnReader = zeal.EdnReader;
 const Edn = zeal.Edn;
 const TagElement = zeal.TagElement;
-const TagError = zeal.TagError;
+const ErrorTag = zeal.ErrorTag;
 
 /// simple function to read a line from user
 /// taken from [ziglearn.org](https://ziglearn.org/chapter-2/#readers-and-writers) by [Sobeston](https://github.com/Sobeston)
@@ -135,7 +135,7 @@ fn repl_edn() !void {
     try stdout.print("finished\n", .{});
 }
 /// given a integer in Edn form, returns a tagged element with that integer plus ten
-fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
+fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.ErrorTag!*TagElement {
     switch (edn) {
         .integer => |i| {
             var i_p = try allocator.create(@TypeOf(i));
@@ -147,7 +147,7 @@ fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.TagError!*TagElement {
             return ele;
         },
         else => {
-            return TagError.TypeNotSupported;
+            return ErrorTag.TypeNotSupported;
         },
     }
 }

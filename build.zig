@@ -1,15 +1,13 @@
 // https://ziglang.org/learn/build-system/
 const std = @import("std");
 // TODO: change name from zeal to end_parser
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const json_step = buildJson(b, target, optimize);
 
+    // TODO(Salim): Remove ziglyph
     // ziglyph
     const ziglyph = b.dependency("ziglyph", .{
         .optimize = optimize,

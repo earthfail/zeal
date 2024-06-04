@@ -280,6 +280,7 @@ pub const Iterator = struct {
                     }
                 }
                 if (character[0] == 'u') {
+                    // a character can be of the form \uXXXX
                     if (character.len != 1 + 4)
                         return ErrorIter.InvalidCharacter;
                     for (character[1..]) |d| {
@@ -459,8 +460,11 @@ pub const Iterator = struct {
     /// character value is the string after \ in the format \3 or \u123
     pub fn readCharacterValue(self: *Iterator) ErrorIter![]const u8 {
         const start_i = self.iter.i;
-        _ = self.iter.nextCodepointSlice() orelse return ErrorIter.NoFirstCharacter;
-
+        const first_char = self.iter.nextCodepoint() orelse return ErrorIter.NoFirstCharacter;
+        // first character should also not be a white space
+        if(first_char == ' ') {
+            return ErrorIter.NoFirstCharacter;
+        }
         var end_i = self.iter.i;
         while (self.iter.nextCodepointSlice()) |c| : (end_i = self.iter.i) {
             if (isSeparator(c) or isDelimiter(c)) {
