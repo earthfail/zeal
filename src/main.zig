@@ -120,8 +120,8 @@ fn repl_edn() !void {
 
 pub fn main() !void {
     // try repl_token();
-    // try repl_edn();
-    try benchmark_main();
+    try repl_edn();
+    // try benchmark_main();
 }
 // clojure koans
 pub fn benchmark_main() !void {

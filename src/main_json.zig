@@ -21,8 +21,8 @@ fn benchmark_parser() !void {
     const args = try process.argsAlloc(allocator);
     defer process.argsFree(allocator, args);
 
-    // const file_name = if (args.len > 1) args[1] else return error.needFile;
-    const file_name = "resources/64KB.json";
+    const file_name = if (args.len > 1) args[1] else "resources/64KB.json";
+    // const file_name = "resources/64KB.json";
     const file = try fs.cwd().openFile(file_name, .{});
     defer file.close();
 

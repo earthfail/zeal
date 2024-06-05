@@ -8,8 +8,9 @@ This is alpha software so expect bugs.
 - understand json.Scanner to improve performance. Currently scanner
   takes 1ms and edn lexer takes 6ms (about the same time as
   json.parser X_X) in debugg build but ReleaseFast they are the same
-- decrease allocations.
-
+- create readEdn that gets passes an allocator. Could be used to pass
+  an ephemeral_allocator to reduce fragmentation
+- profile more
 ## Usage
 1. add `zeal` to `build.zig.zon`:
 

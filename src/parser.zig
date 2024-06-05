@@ -1,5 +1,5 @@
 const std = @import("std");
-// const log = std.log;
+const config = @import("config");
 const mem = std.mem;
 const big = std.math.big;
 const unicode = std.unicode;
@@ -481,7 +481,7 @@ pub const Edn = union(enum) {
                     try writer.print("\\{u}", .{value.character});
             },
             .string => {
-                try writer.print("\"{s}\"", .{value.string});
+                try writer.print("{s}", .{value.string});
             },
             .list => {
                 try writer.writeAll("( ");
