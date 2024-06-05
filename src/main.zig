@@ -120,8 +120,8 @@ fn repl_edn() !void {
 
 pub fn main() !void {
     // try repl_token();
-    try repl_edn();
-    // try benchmark_main();
+    // try repl_edn();
+    try benchmark_main();
 }
 // clojure koans
 pub fn benchmark_main() !void {
@@ -130,8 +130,17 @@ pub fn benchmark_main() !void {
     defer tracy.message("edn thread exit");
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var os_allocator = tracy.TracingAllocator.initNamed("edn_gpa", gpa.allocator());
+    // defer _ = gpa.deinit();
+    defer {
+        _ = gpa.detectLeaks();
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.debug.print("oopsie\n", .{});
+        }
+    }
+    const g_allocator = gpa.allocator();
+    var logging_allocator = std.heap.LoggingAllocator(.debug, .debug).init(g_allocator);
+    var os_allocator = tracy.TracingAllocator.initNamed("edn_gpa", logging_allocator.allocator());
     const allocator = os_allocator.allocator();
 
     const args = try process.argsAlloc(allocator);
@@ -164,30 +173,36 @@ pub fn benchmark_main() !void {
     // if (EdnReader.readEdn(allocator, &iter)) |edn| {
     var t = try std.time.Timer.start();
     tracy.frameMark();
-    if (edn_reader.readEdn()) |*edn| {
+    {
+        var edn = edn_reader.readEdn() catch |err| {
+            try stdout.print("got error parsing input {}\n", .{err});
+            return err;
+        };
+        defer edn.deinit(allocator);
         const zone = tracy.initZone(@src(), .{ .name = "edn reader" });
         defer zone.deinit();
         // log.info("address {*} type {s}, value:", .{ edn, @tagName(edn.*) });
         // log.info("edn from log {}\n",.{edn.*});
         // try stdout.print("{}\n", .{edn.*});
-        const serialize = try parser.Edn.serialize(edn.*, allocator);
-        defer allocator.free(serialize);
+        // const serialize = try parser.Edn.serialize(edn, allocator);
+        // defer allocator.free(serialize);
+        // std.debug.print("Hi mom\n",.{});
 
-        switch (edn.*) {
+        switch (edn) {
             .list, .vector => |v| {
-                try stdout.print("length is {}\n", .{v.items.len});
+                try stdout.print("edn says there is {}\n", .{v.items.len});
             },
             else => {
-                try stdout.print("output is not a vector it is {s}\n", .{@tagName(edn.*)});
+                try stdout.print("output is not a vector it is {s}\n", .{@tagName(edn)});
             },
         }
-        try stdout.print("{s}\n", .{serialize});
+        // try stdout.print("{s}\n", .{serialize});
 
         // TODO(Salim): learn how manage data you incompetent ******
         // edn.deinit(allocator);
-    } else |_| {}
+    }
 
-    std.debug.print("{}\n", .{@as(f64, @floatFromInt(t.read())) / 1000_000});
+    std.debug.print("edn timer {}\n", .{@as(f64, @floatFromInt(t.read())) / 1000_000});
 }
 fn edn_to_inst(allocator: mem.Allocator, edn: Edn) parser.ErrorTag!*TagElement {
     switch (edn) {

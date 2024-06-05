@@ -90,12 +90,12 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_unit_tests.step);
     }
 
-    // const benchmark = b.step("bench", "Run main.zip and main_json.zig");
-    const benchmark = b.step("json", "Run main_json.zig");
+    const benchmark = b.step("bench", "Run main.zip and main_json.zig");
+    // const benchmark = b.step("json", "Run main_json.zig");
     const run_json = b.addRunArtifact(json_step);
     run_json.step.dependOn(b.getInstallStep());
     benchmark.dependOn(&run_json.step);
-    // benchmark.dependOn(&run_cmd.step);
+    benchmark.dependOn(&run_cmd.step);
 }
 
 fn buildJson(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {

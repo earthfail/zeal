@@ -356,17 +356,15 @@ pub const Edn = union(enum) {
     pub const @"true" = Edn{ .boolean = true };
     pub const @"false" = Edn{ .boolean = false };
 
-    // free memory inside `self` but doesn't call the allocator on `self`
+    // frees memory inside `self` but doesn't call the allocator on `self`
     pub fn deinit(self: *Edn, allocator: mem.Allocator) void {
         switch (self.*) {
             .nil, .boolean => return,
             .integer, .float, .character => {
-                // allocator.destroy(self);
                 return;
             },
             .string, .symbol, .keyword => |*literal| {
                 allocator.free(literal.*);
-                // allocator.destroy(self);
             },
             // TODO(Salim): remove simple conditions like for .bitInt, .nil, .boolean ...
             inline .bigInteger => |_| {
@@ -374,23 +372,21 @@ pub const Edn = union(enum) {
             },
             inline .bigFloat => |*number| {
                 number.deinit();
-                // allocator.destroy(self);
             },
             inline .list, .vector => |*collection| {
                 for (collection.items) |*item| {
                     item.deinit(allocator);
                 }
                 collection.deinit(allocator);
-                // allocator.destroy(self);
             },
             .hashmap => |*collection| {
                 var iterator = collection.iterator();
                 while (iterator.next()) |entry| {
                     entry.key_ptr.*.deinit(allocator);
                     entry.value_ptr.*.deinit(allocator);
+                    allocator.destroy(entry.key_ptr.*);
                 }
                 collection.deinit(allocator);
-                // allocator.destroy(self);
             },
             .hashset => |*collection| {
                 var iterator = collection.iterator();
@@ -398,7 +394,6 @@ pub const Edn = union(enum) {
                     entry.key_ptr.*.deinit(allocator);
                 }
                 collection.deinit(allocator);
-                // allocator.destroy(self);
             },
             .tag => {
                 allocator.free(self.tag.tag);

@@ -5,7 +5,8 @@ const json = std.json;
 // const tracy = @import("tracy");
 
 pub fn main() !void {
-    return benchmark_scanner();
+    // return benchmark_scanner();
+    return benchmark_parser();
 }
 fn benchmark_parser() !void {
     // var t = try std.time.Timer.start();
@@ -46,8 +47,8 @@ fn benchmark_parser() !void {
 
     const parsed = try json.parseFromSlice(json.Value, allocator, input, .{});
     defer parsed.deinit();
-    try stdout.print("{}\n", .{parsed.value.array.items.len});
-    std.debug.print("{}\n", .{@as(f64, @floatFromInt(t.read())) / 1000_000});
+    try stdout.print("json says there is {}\n", .{parsed.value.array.items.len});
+    std.debug.print("json time {}\n", .{@as(f64, @floatFromInt(t.read())) / 1000_000});
     // zone.deinit();
     // const stdin = std.io.getStdIn().reader();
     // const b = try stdin.readByte();
@@ -94,7 +95,7 @@ fn benchmark_scanner() !void {
     defer scanner.deinit();
     var counter: usize = 0;
     while (scanner.next()) |token| {
-        if(token == .end_of_document)
+        if (token == .end_of_document)
             break;
         counter += 1;
     } else |err| {
